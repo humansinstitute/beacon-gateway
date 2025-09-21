@@ -1,0 +1,99 @@
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+
+# Logs and caches
+logs/
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+bun-debug.log*
+.cache/
+cache/
+.eslintcache
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.cert
+*.pfx
+*.p12
+*.der
+*.csr
+*.ovpn
+*.kdbx
+*.keystore
+*.jks
+*.p8
+*.p10
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.secret
+*.secrets
+secret.*
+secrets.*
+credentials.json
+service-account*.json
+firebase-adminsdk-*.json
+
+# WhatsApp Web JS session/auth data (do not commit)
+.wwebjs_auth/
+.wwebjs_auth-*/
+wwebjs_auth/
+wwebjs_auth-*/
+.wwebjs_cache/
+sessions/
+session/
+.session/
+
+# Puppeteer/Chromium downloads
+.puppeteer/
+puppeteer/
+.local-chromium/
+.chromium/
+
+# Build artifacts and coverage
+dist/
+build/
+out/
+coverage/
+reports/
+artifacts/
+dumps/
+
+# Potentially large output folders
+uploads/
+downloads/
+media/
+files/
+public/uploads/
+public/files/
+public/media/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.iml
+
+# Temp files
+tmp/
+temp/
+.tmp/
+*.swp
+*.swo
+
+# Notes:
+# - If you change SESSION_DIR via env, ensure it remains ignored here.
+# - Adjust the large-output folders above to fit your workflow.
+
