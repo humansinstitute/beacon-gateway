@@ -94,12 +94,21 @@ client.on("disconnected", (reason) => {
   scheduleReinit(reason, 5000);
 });
 
+// Prefer a human-friendly contact name; avoid the generic "WhatsApp User"
+function resolveContactName(contact) {
+  const candidate = (
+    (contact?.pushname || contact?.name || contact?.verifiedName || contact?.shortName || "").trim()
+  );
+  if (candidate && candidate !== "WhatsApp User") return candidate;
+  return contact?.number || contact?.id?.user || "unknown";
+}
+
 client.on("message", async (msg) => {
   try {
     let contactName = undefined;
     try {
       const contact = await msg.getContact();
-      contactName = contact?.pushname || contact?.name || contact?.number;
+      contactName = resolveContactName(contact);
     } catch (_) {}
     console.log("Incoming message:", {
       from: msg.from,
