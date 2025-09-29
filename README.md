@@ -23,7 +23,7 @@ The purpose of beacon is not to be "the wallet to end them all" it is to provide
 
 It was born out of an initial frustration of trying to deliver sophisticated apps in places where the regular user couldn't afford internet, the internet was bad when they did have it, smartphones barely existed and the only single thing that ever worked reliably was WhatsApp.
 
-Turns out Zuckerberg already pays for subsidized access to a limited, controlled pastiche of the internet. so lets put some freedom tech in it.
+Turns out Zuckerberg already pays for subsidized access to a limited, controlled pastiche of the internet. so lets put some freedom tech in i
 
 -----
 
@@ -67,11 +67,11 @@ HTTP API (orchestrator)
 
 Common tasks
 - Logout/clear session: delete the `SESSION_DIR` (default `.wwebjs_auth`) and restart.
-- Run headful browser for debugging: `HEADLESS=false bun run src/index.js`
+- Run headful browser for debugging: set `HEADLESS=false` when running `src/start.ts`
 
 Caveats
 - Puppeteer downloads Chromium on first install; this can take a few minutes.
-- This is a minimal gateway; harden and monitor for production use (health checks, retries, metrics, storage for logs, etc.).
+- This project uses a modular runtime under `src/start.ts`; harden and monitor for production use (health checks, retries, metrics, storage for logs, etc.).
 
 Troubleshooting
 - Repeated `Client disconnected: LOGOUT`:
@@ -82,13 +82,10 @@ Troubleshooting
   - Consider using system Chrome: set `PUPPETEER_EXECUTABLE_PATH=/path/to/Chrome`.
 - Sandbox errors in containerized environments: set `NO_SANDBOX=true`.
 
-Queue-based gateway (p-queue)
-- File: `src/whatsapp-gateway-queue.ts` implements two queues:
-  - `GATEWAY_IN` for inbound message processing
-  - `GATEWAY_OUT` for outbound sending
-- Tagging: all queue items include `{ gateway: { npub: GATEWAY_NPUB, type: 'whatsapp' } }`.
-- Tuning: adjust `concurrency`, `interval`, and `intervalCap` for each queue.
-- Extensibility: implement your own business logic in `processIncomingMessage`.
+Queues
+- The modular runtime uses an in-process event bus under `src/queues/`.
+- Adapters (e.g., `src/gateway/whatsapp/adapter.ts`) enqueue normalized inbound events and consume outbound events to send.
+- Tagging: outbound messages include a `gateway` object, typically `{ npub: GATEWAY_NPUB, type: 'whatsapp' }`.
 
 Message Flow
 

@@ -1,21 +1,21 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Source code: `src/` — main entrypoints: `src/index.js` (HTTP), `src/start-gateway.ts` (unified runner), `src/whatsapp-gateway-queue.ts` (queue flows).
+- Source code: `src/` — main entrypoint: `src/start.ts` (modular unified runner). Adapters live under `src/gateway/`.
 - Environment: `.env` / `.env.example` at repo root. Session data: `.wwebjs_auth/`; cache: `.wwebjs_cache/`.
 - Dependencies: `bun.lock`, `node_modules/`. Docs: `README.md`.
 - Tests (if added): `src/__tests__/*.test.ts`.
 
 ## Build, Test, and Development Commands
 - Install deps: `bun install`
-- Run HTTP gateway: `bun run src/index.js`
-- Run queue client: `GATEWAY_NPUB=<npub> bun run src/whatsapp-gateway-queue.ts`
-- Run unified gateway: `GATEWAY_NPUB=<npub> bun run src/start-gateway.ts`
-- Watch (unified): `bun --watch src/start-gateway.ts`
+- Run modular gateway: `bun run src/start.ts`
+- Run modular gateway: `GATEWAY_NPUB=<npub> bun run src/start.ts`
+- Run unified gateway: `GATEWAY_NPUB=<npub> bun run src/start.ts`
+- Watch (unified): `bun --watch src/start.ts`
 Notes: Bun auto-loads `.env`. Common vars: `PORT`, `SESSION_DIR`, `HEADLESS`, `NO_SANDBOX`, `PUPPETEER_EXECUTABLE_PATH`/`CHROME_BIN`, `GATEWAY_NPUB`.
 
 ## Coding Style & Naming Conventions
-- Language: Prefer TypeScript for new modules (`.ts`). Keep `src/index.js` Node-compatible JS.
+- Language: Prefer TypeScript for new modules (`.ts`).
 - Indentation: 2 spaces; keep lines concise; remove unused imports.
 - Naming: Files like `gateway-*.ts`, `*-queue.ts`. Functions `camelCase`; classes `PascalCase`.
 - Logging: Use `console.log/error` with small, structured objects (e.g., `{ event, id, status }`).
@@ -24,7 +24,7 @@ Notes: Bun auto-loads `.env`. Common vars: `PORT`, `SESSION_DIR`, `HEADLESS`, `N
 ## Testing Guidelines
 - No formal suite yet. Validate manually:
   - HTTP: `GET /`, `GET /qr`, `POST /send`.
-  - Queue stats and graceful shutdown in `src/start-gateway.ts` / `src/whatsapp-gateway-queue.ts`.
+  - Queue handling and graceful shutdown in `src/start.ts` and adapters under `src/gateway/`.
 - If adding tests: place under `src/__tests__/*.test.ts`; run with `bun test`.
 
 ## Commit & Pull Request Guidelines
