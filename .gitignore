@@ -72,6 +72,12 @@ reports/
 artifacts/
 dumps/
 
+# SQLite database files (local persistence)
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
 # Potentially large output folders
 uploads/
 downloads/
@@ -96,4 +102,3 @@ temp/
 # Notes:
 # - If you change SESSION_DIR via env, ensure it remains ignored here.
 # - Adjust the large-output folders above to fit your workflow.
-

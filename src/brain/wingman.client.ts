@@ -15,10 +15,17 @@ function env(key: string): string | undefined {
   return (bunVal ?? nodeVal) as string | undefined;
 }
 
+export type WingmanTriggerInfo = {
+  apiUrl: string;
+  recipeId: string;
+  sessionName: string;
+  prompt: string;
+};
+
 export async function triggerWingmanForBeacon(
   msg: BeaconMessage,
   opts: WingmanOptions = {}
-): Promise<void> {
+): Promise<WingmanTriggerInfo> {
   const apiUrl = (opts.apiUrl || env('WINGMAN_API_URL') || '').replace(/\/?$/, '/');
   if (!apiUrl) throw new Error('WINGMAN_API_URL not set');
 
@@ -74,4 +81,5 @@ export async function triggerWingmanForBeacon(
     throw new Error(`Wingman trigger failed: HTTP ${res.status}`);
   }
   console.log('[wingman] trigger ok', json || textRes);
+  return { apiUrl, recipeId, sessionName, prompt };
 }

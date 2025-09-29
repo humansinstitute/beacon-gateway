@@ -5,6 +5,7 @@ import { startNostrAdapter } from './gateway/nostr';
 import { startMeshAdapter } from './gateway/mesh';
 import { startBrainWorker } from './brain/worker';
 import { getOutboundContext, forget } from './brain/beacon_store';
+import { logAction, setMessageResponse } from './db';
 
 function main() {
   const npub = getEnv('GATEWAY_NPUB', '');
@@ -64,6 +65,9 @@ function main() {
             quotedMessageId: ctx.quotedMessageId,
             gateway: ctx.gateway,
           });
+          logAction(beaconID, 'webhook_received', { body: answer }, 'ok');
+          logAction(beaconID, 'outbound_sent', { to: ctx.to, gateway: ctx.gateway, quotedMessageId: ctx.quotedMessageId, body: answer }, 'ok');
+          setMessageResponse(beaconID, answer, 'wingman');
           forget(beaconID);
           return json({ ok: true });
         } catch (err: any) {
