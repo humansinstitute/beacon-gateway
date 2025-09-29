@@ -27,7 +27,25 @@ export async function triggerWingmanForBeacon(
   const dir = opts.dir ?? '~/code/temp/beacon';
 
   const text = (msg.source.text || '').trim();
-  const prompt = `${text} ---{'beaconID':'${msg.beaconID}'}`;
+  const port = env('PORT') || '3009';
+  const base = (env('WEBHOOK_BASE_URL') || `http://localhost:${port}`).replace(/\/$/, '');
+  const webhookUrl = `${base}/api/webhook/wingman_response`;
+
+  const promptObj = {
+    message: text,
+    next_action: {
+      url: webhookUrl,
+      method: 'POST',
+      content_type: 'application/json',
+      body_template: {
+        beaconID: msg.beaconID,
+        body: '<REPLACE_WITH_ANSWER>',
+      },
+    },
+  } as const;
+  // Compact JSON and strip newlines/control characters for robustness
+  const compact = JSON.stringify(promptObj);
+  const prompt = compact.replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ').replace(/\s+/g, ' ').trim();
   const sessionName = `Beacon Session ${msg.beaconID}`;
 
   const body = {
@@ -57,4 +75,3 @@ export async function triggerWingmanForBeacon(
   }
   console.log('[wingman] trigger ok', json || textRes);
 }
-

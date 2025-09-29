@@ -7,8 +7,8 @@
     "dev": "bun run src/index.js",
     "start": "bun run src/index.js",
     "start:queue": "bun run src/whatsapp-gateway-queue.ts",
-    "start:all": "bun run src/start-gateway.ts",
-    "dev:all": "bun --watch src/start-gateway.ts",
+    "start:all": "bun run src/start.ts",
+    "dev:all": "bun --watch src/start.ts",
     "start:modular": "bun run src/start.ts",
     "dev:modular": "bun --watch src/start.ts"
   },
