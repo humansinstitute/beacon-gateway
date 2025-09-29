@@ -10,6 +10,7 @@
  */
 
 import WhatsAppGatewayClient from './whatsapp-gateway-queue';
+import { getOutboundContext, forget } from './brain/beacon_store';
 
 // Env helper (supports Bun.env and process.env)
 const getEnv = (key: string, fallback?: string): string | undefined => {
@@ -101,6 +102,33 @@ async function main() {
         }
       }
 
+      // Wingman webhook: accept result and route back to original sender
+      if ((pathname === '/api/webhook/wingman_response' || pathname === '/api/webhook/wingmanresponse') && req.method === 'POST') {
+        try {
+          const body = await req.json().catch(() => null) as any;
+          if (!body) return json({ error: 'Invalid JSON' }, 400);
+          const answer = (body.body ?? body.message ?? '').toString();
+          const beaconID = (body.beaconID ?? body.beaconId ?? body.beacon_id ?? '').toString();
+          if (!answer || !beaconID) return json({ error: "'body' and 'beaconID' are required" }, 400);
+
+          const ctx = getOutboundContext(beaconID);
+          if (!ctx) return json({ error: 'Unknown beaconID' }, 404);
+
+          const to = normalizeToJid(ctx.to);
+          if (!to) return json({ error: 'Invalid destination in context' }, 500);
+
+          await gateway.queueOutgoingMessage({
+            data: { to, body: answer, quotedMessageId: ctx.quotedMessageId },
+            gateway: ctx.gateway,
+          });
+          // Optionally free the mapping
+          forget(beaconID);
+          return json({ ok: true });
+        } catch (err: any) {
+          return json({ error: 'Failed to process webhook', details: String(err?.message || err) }, 500);
+        }
+      }
+
       return new Response('Not Found', { status: 404 });
     },
   });
@@ -122,4 +150,3 @@ if (import.meta.main) {
     status = 'INIT_ERROR';
   });
 }
-

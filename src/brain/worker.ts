@@ -4,10 +4,15 @@ import { toGatewayOut } from '../types';
 import { quickResponseWithAgent } from './callAI.util';
 import conversationAgent from './agents/conversationAgent.ts';
 import { routeIntent } from './intent_router';
+import { rememberInbound } from './beacon_store';
+import { triggerWingmanForBeacon } from './wingman.client';
 
 export function startBrainWorker() {
   consumeBeacon(async (msg: BeaconMessage) => {
     try {
+      // Remember routing context for potential webhook responses
+      rememberInbound(msg);
+
       // Determine input text for quick response
       let text = (msg.source.text || '').trim();
       if (!text) {
@@ -25,9 +30,12 @@ export function startBrainWorker() {
 
       // Route by intent (simple rules); default falls back to AI
       const route = routeIntent(text);
-      const answer = route.type === 'wingman'
-        ? route.responseText
-        : await quickResponseWithAgent(conversationAgent, text, undefined);
+      if (route.type === 'wingman') {
+        await triggerWingmanForBeacon(msg);
+        return; // wingman webhook will deliver the response
+      }
+
+      const answer = await quickResponseWithAgent(conversationAgent, text, undefined);
 
       // Populate response envelope
       msg.response = {
@@ -45,5 +53,5 @@ export function startBrainWorker() {
       console.error('[brain] error handling beacon message:', { beaconID: msg.beaconID, err });
     }
   });
-  console.log('[brain] worker started (intent_router)');
+  console.log('[brain] worker started (intent_router + wingman)');
 }
