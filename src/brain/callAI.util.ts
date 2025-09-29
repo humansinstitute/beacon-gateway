@@ -1,5 +1,5 @@
 /**
- * quick_response
+ * callAI.util
  *
  * Text-only helper to call OpenRouter and get a short answer.
  * - Default model: 'openai/gpt-oss-120b'
@@ -66,7 +66,7 @@ export async function quickResponse(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   // Minimal, structured logging for visibility
-  console.log('[quick_response] request', {
+  console.log('[callAI] request', {
     model,
     questionPreview: trimmed.slice(0, 120),
     timeoutMs,
@@ -98,7 +98,7 @@ export async function quickResponse(
     const data = (await res.json()) as OpenRouterChatResponse;
     const choice = data.choices?.[0];
     const content = choice?.message?.content?.trim();
-    console.log('[quick_response] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage });
+    console.log('[callAI] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage });
     if (!content) throw new Error('OpenRouter: empty content in response');
     return content;
   };
@@ -110,7 +110,7 @@ export async function quickResponse(
     } catch (err) {
       const isAbort = err instanceof DOMException && err.name === 'AbortError';
       if (!isAbort) throw err;
-      console.warn('[quick_response] attempt aborted; retrying once');
+      console.warn('[callAI] attempt aborted; retrying once');
       // Reset controller for retry
       clearTimeout(timeout);
       controller.abort();
@@ -143,14 +143,14 @@ export async function quickResponse(
       const data = (await res.json()) as OpenRouterChatResponse;
       const choice = data.choices?.[0];
       const content = choice?.message?.content?.trim();
-      console.log('[quick_response] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage, retryMs: Date.now() - started });
+      console.log('[callAI] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage, retryMs: Date.now() - started });
       if (!content) throw new Error('OpenRouter: empty content in response');
       clearTimeout(timeout2);
       return content;
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error('[quick_response] error', { message });
+    console.error('[callAI] error', { message });
     throw err;
   } finally {
     clearTimeout(timeout);
@@ -198,7 +198,7 @@ export async function quickResponseWithAgent(
   if (agent.chat.messageHistory) messages.push({ role: 'assistant', content: agent.chat.messageHistory });
   messages.push({ role: 'user', content: agent.chat.userPrompt });
 
-  console.log('[quick_response] request', {
+  console.log('[callAI] request', {
     model: agent.model.model,
     temperature: agent.model.temperature,
     questionPreview: agent.chat.userPrompt.slice(0, 120),
@@ -228,7 +228,7 @@ export async function quickResponseWithAgent(
     const data = (await res.json()) as OpenRouterChatResponse;
     const choice = data.choices?.[0];
     const content = choice?.message?.content?.trim();
-    console.log('[quick_response] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage });
+    console.log('[callAI] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage });
     if (!content) throw new Error('OpenRouter: empty content in response');
     return content;
   };
@@ -240,19 +240,19 @@ export async function quickResponseWithAgent(
     } catch (err) {
       const isAbort = err instanceof DOMException && err.name === 'AbortError';
       if (!isAbort) throw err;
-      console.warn('[quick_response] attempt aborted; retrying once');
+      console.warn('[callAI] attempt aborted; retrying once');
       clearTimeout(timeout);
       controller.abort();
       const controller2 = new AbortController();
       const timeout2 = setTimeout(() => controller2.abort(), timeoutMs);
       const result = await attempt(controller2.signal);
       clearTimeout(timeout2);
-      console.log('[quick_response] retry succeeded', { durationMs: Date.now() - started });
+      console.log('[callAI] retry succeeded', { durationMs: Date.now() - started });
       return result;
     }
   } catch (err) {
     const messageErr = err instanceof Error ? err.message : String(err);
-    console.error('[quick_response] error', { message: messageErr });
+    console.error('[callAI] error', { message: messageErr });
     throw err;
   } finally {
     clearTimeout(timeout);

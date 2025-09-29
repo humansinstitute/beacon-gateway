@@ -1,42 +1,40 @@
 # Repository Guidelines
 
-## Project Structure & Modules
-- Source code: `src/` — main entrypoints are `src/index.js` (HTTP gateway), `src/start-gateway.ts` (unified runner), and `src/whatsapp-gateway-queue.ts` (queue-based flows).
-- Environment: `.env` and `.env.example` in repo root; session data stored under `.wwebjs_auth/` and cache in `.wwebjs_cache/`.
-- Lockfile: `bun.lock`; dependencies live in `node_modules/`.
-- Docs: `README.md` covers setup, API, and troubleshooting.
+## Project Structure & Module Organization
+- Source code: `src/` — main entrypoints: `src/index.js` (HTTP), `src/start-gateway.ts` (unified runner), `src/whatsapp-gateway-queue.ts` (queue flows).
+- Environment: `.env` / `.env.example` at repo root. Session data: `.wwebjs_auth/`; cache: `.wwebjs_cache/`.
+- Dependencies: `bun.lock`, `node_modules/`. Docs: `README.md`.
+- Tests (if added): `src/__tests__/*.test.ts`.
 
-## Build, Test, and Development
+## Build, Test, and Development Commands
 - Install deps: `bun install`
 - Run HTTP gateway: `bun run src/index.js`
 - Run queue client: `GATEWAY_NPUB=<npub> bun run src/whatsapp-gateway-queue.ts`
 - Run unified gateway: `GATEWAY_NPUB=<npub> bun run src/start-gateway.ts`
-- Watch mode (unified): `bun --watch src/start-gateway.ts`
-Notes
-- Bun auto-loads `.env`. Common vars: `PORT`, `SESSION_DIR`, `HEADLESS`, `NO_SANDBOX`, `PUPPETEER_EXECUTABLE_PATH`/`CHROME_BIN`, `GATEWAY_NPUB`.
+- Watch (unified): `bun --watch src/start-gateway.ts`
+Notes: Bun auto-loads `.env`. Common vars: `PORT`, `SESSION_DIR`, `HEADLESS`, `NO_SANDBOX`, `PUPPETEER_EXECUTABLE_PATH`/`CHROME_BIN`, `GATEWAY_NPUB`.
 
-## Coding Style & Naming
-- Language: TypeScript preferred for new modules (`.ts`); keep Node-compatible JS for `src/index.js`.
-- Indentation: 2 spaces; keep lines concise; avoid unused imports.
-- Naming: use descriptive file names (e.g., `gateway-*.ts`, `*-queue.ts`). Functions: `camelCase`; classes: `PascalCase`.
-- Logging: use concise `console.log/error` with structured objects for events.
-- Formatting/Linting: if adding tools, prefer Prettier defaults and ESLint (no enforced config yet). Do not introduce project-wide reformatting in unrelated PRs.
+## Coding Style & Naming Conventions
+- Language: Prefer TypeScript for new modules (`.ts`). Keep `src/index.js` Node-compatible JS.
+- Indentation: 2 spaces; keep lines concise; remove unused imports.
+- Naming: Files like `gateway-*.ts`, `*-queue.ts`. Functions `camelCase`; classes `PascalCase`.
+- Logging: Use `console.log/error` with small, structured objects (e.g., `{ event, id, status }`).
+- Formatting/Linting: If adding tools, prefer Prettier defaults and ESLint. Do not mass-reformat unrelated code.
 
 ## Testing Guidelines
-- No formal test suite yet. Validate via:
+- No formal suite yet. Validate manually:
   - HTTP: `GET /`, `GET /qr`, `POST /send`.
   - Queue stats and graceful shutdown in `src/start-gateway.ts` / `src/whatsapp-gateway-queue.ts`.
-- If adding tests, place under `src/__tests__/*.test.ts` and use `bun test`.
+- If adding tests: place under `src/__tests__/*.test.ts`; run with `bun test`.
 
-## Commit & Pull Requests
-- Commits: small, atomic, imperative subject (e.g., "Add queue backoff for send failures"). Reference issues like `#123`.
+## Commit & Pull Request Guidelines
+- Commits: small, atomic, imperative subject (e.g., "Add queue backoff for send failures"). Reference issues (e.g., `#123`).
 - PRs must include:
-  - Summary of behavior change and rationale.
+  - Behavior summary and rationale.
   - Steps to run (commands + env vars) and expected outputs.
-  - Screenshots/log snippets for QR auth, HTTP responses, or queue stats when relevant.
-  - Any config changes to `.env` and migration notes.
+  - Screenshots/log snippets (QR auth, HTTP responses, queue stats) when relevant.
+  - Any `.env` or config changes and migration notes.
 
-## Security & Configuration
-- Keep secrets out of VCS. Do not commit `.env` or session folders.
-- For containers/CI, set `NO_SANDBOX=true` and prefer system Chrome via `PUPPETEER_EXECUTABLE_PATH`.
-- To reset auth: delete `SESSION_DIR` (default `.wwebjs_auth`) and restart.
+## Security & Configuration Tips
+- Do not commit secrets, `.env`, or session folders. To reset auth, delete `SESSION_DIR` (default `.wwebjs_auth`) and restart.
+- Containers/CI: set `NO_SANDBOX=true` and prefer system Chrome via `PUPPETEER_EXECUTABLE_PATH`.
