@@ -1,6 +1,31 @@
-WhatsApp Web JS Gateway (Bun)
+Beacon - Main 
 
-Minimal WhatsApp Web JS gateway using Bun. Provides QR login in terminal and a tiny HTTP API to inspect status and send messages.
+# Beacon: A protocol to provide a gateway to freedom tech
+
+![freedom_tech_meme](https://github.com/user-attachments/assets/622123cc-86e0-4365-9bbf-73d2ffe56685)
+
+### Why Beacon? 
+
+> On the island of Pharos the Ptolemies lit a beacon that turned Alexandria into the nerve-centre of the ancient world, guiding mariners safely into the port of liberty, knowledge and freedom. 
+> With free acess to information we can find our own solutions and build our own freedom. The library of Alexandria once represented this freedom but was lost to time. 
+> The goal of the project is to relight a similar flame on the internet. To take closed, controlled networks and guide people towards free information, free networks and freedom money.
+>
+> Wherever a handset can send a text, Beacon can deliver knowledge, coordination, and untraceable freedom money.
+> The tower is gone; but the light will remain.
+
+Beacon is intended to be an open protocol to allow communities to offer access to freedom tech, with no on device install and minimal barrier to entry inside applications you already use.
+
+A trojan horse for freedom tech.
+
+### Purpose
+
+The purpose of beacon is not to be "the wallet to end them all" it is to provide a pragmatic entry point.
+
+It was born out of an initial frustration of trying to deliver sophisticated apps in places where the regular user couldn't afford internet, the internet was bad when they did have it, smartphones barely existed and the only single thing that ever worked reliably was WhatsApp.
+
+Turns out Zuckerberg already pays for subsidized access to a limited, controlled pastiche of the internet. so lets put some freedom tech in it.
+
+-----
 
 Prerequisites
 - Bun installed (`bun --version`)
@@ -10,26 +35,21 @@ Setup
 1) Install dependencies:
    bun install
 
-2) Run the unified gateway (queues + HTTP):
-   GATEWAY_NPUB=npub1yourkey bun run src/start-gateway.ts
-
-3) Alternatively, run the basic HTTP-only gateway:
-   bun run src/index.js
-
-4) Or run the queue-only client (no HTTP):
-   GATEWAY_NPUB=npub1yourkey bun run src/whatsapp-gateway-queue.ts
+2) Start everything (gateway + brain + webhook server):
+   GATEWAY_NPUB=npub1yourkey bun run start:all
 
 3) Scan the QR shown in the terminal with the WhatsApp app.
 
-Environment variables (optional)
-- `PORT` (default: 3000) — can be set in `.env`
+Environment
+- `PORT` (default: 3009) — orchestrator HTTP port
 - `SESSION_DIR` (default: .wwebjs_auth)
-- `HEADLESS` (default: true) — set to `false` to see the browser UI (useful for debugging)
- - `NO_SANDBOX` (default: false) — set `true` in Docker/CI if sandbox issues arise
- - `PUPPETEER_EXECUTABLE_PATH` or `CHROME_BIN` — use a system Chrome/Chromium instead of downloaded one
- - `GATEWAY_NPUB` — required for the queue client; nostr npub of this gateway
-- `NO_SANDBOX` (default: false) — set `true` in Docker/CI if sandbox issues arise
-- `PUPPETEER_EXECUTABLE_PATH` or `CHROME_BIN` — use a system Chrome/Chromium instead of downloaded one
+- `HEADLESS` (default: true) — set `false` for headful browser
+- `NO_SANDBOX` (default: false) — set `true` for Docker/CI
+- `PUPPETEER_EXECUTABLE_PATH` or `CHROME_BIN` — use system Chrome
+- `GATEWAY_NPUB` — npub tag for this gateway (required)
+- `OPENROUTER_API_KEY` — for default AI responses
+- `WINGMAN_API_URL` and `WINGMAN_API_TOKEN` — Wingman trigger endpoint and token
+- `WEBHOOK_BASE_URL` (optional) — base URL for webhook in prompts (default http://localhost:PORT)
 
 .env support
 - Bun automatically loads `.env` for `bun run`.
@@ -39,24 +59,11 @@ Environment variables (optional)
   SESSION_DIR=.wwebjs_auth
   HEADLESS=true
 
-HTTP API
-- GET `/` — Returns gateway status
-  Example: { "status": "INITIALIZING" | "QR" | "READY" | "DISCONNECTED" | "AUTH_FAIL" }
-
-- GET `/qr` — Returns last QR (raw string) when status = `QR`
-  Example: { "qr": "...", "status": "QR" }
-
-- POST `/send` — Send a text and/or media message
-  Body (JSON):
-  {
-    "to": "+15551234567" | "15551234567" | "15551234567@c.us",
-    "message": "hello there",
-    "mediaBase64": "<optional base64 payload>",
-    "mediaMime": "image/png" | "application/octet-stream" | ...
-  }
-  Notes:
-  - `to` accepts digits, `+` prefixed digits, or a full WhatsApp JID (`@c.us`).
-  - Either `message` or `mediaBase64` must be provided.
+HTTP API (orchestrator)
+- GET `/` or `/health` — { ok: true, service, npub }
+- POST `/api/webhook/wingman_response` — body: { body: string, beaconID: string }
+  - Routes the answer back to the original sender via WhatsApp
+  - Sanitizes control characters and collapses whitespace
 
 Common tasks
 - Logout/clear session: delete the `SESSION_DIR` (default `.wwebjs_auth`) and restart.
@@ -131,45 +138,16 @@ Message Flow
   │      WhatsApp Recipient       │
   └───────────────────────────────┘
 
-Usage Examples
+Brain + Intent Routing
+- Worker: `src/brain/worker.ts` consumes Beacon envelopes and routes intents
+- Router: `src/brain/intent_router.ts`
+  - If any of the first 5 words include "wingman" → triggers Wingman
+  - Otherwise uses OpenRouter via `src/brain/callAI.util.ts` and conversation agent
 
-Example 1: Basic Setup
-
-```typescript
-import WhatsAppGatewayClient from './whatsapp-gateway-queue';
-
-const gateway = new WhatsAppGatewayClient();
-await gateway.initialize();
-
-// Queue stats
-console.log(gateway.getQueueStats());
-```
-
-Example 2: Send Outgoing Message
-
-```typescript
-await gateway.queueOutgoingMessage({
-  data: {
-    to: '1234567890@c.us',
-    body: 'Hello from gateway!'
-  },
-  gateway: gateway.getGatewayInfo()
-});
-```
-
-Example 3: Reply to Message
-
-```typescript
-await gateway.queueOutgoingMessage({
-  data: {
-    to: '1234567890@c.us',
-    body: 'This is a reply',
-    quotedMessageId: 'original-message-id'
-  },
-  gateway: gateway.getGatewayInfo(),
-  originalMessageId: 'original-message-id'
-});
-```
+Wingman Integration
+- Trigger: `src/brain/wingman.client.ts` posts to `WINGMAN_API_URL` with a compact JSON prompt
+- Webhook: `/api/webhook/wingman_response` accepts { body, beaconID } and replies to the right chat
+- Context mapping: `src/brain/beacon_store.ts` remembers inbound routing (to, quotedMessageId, gateway)
 
 Testing Checklist
 - [ ] GATEWAY_NPUB environment variable is set
