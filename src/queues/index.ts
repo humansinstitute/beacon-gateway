@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import type { GatewayInData, GatewayOutData } from '../types';
+import type { BeaconMessage, GatewayInData, GatewayOutData } from '../types';
 
 const bus = new EventEmitter();
 
@@ -22,5 +22,16 @@ export function enqueueOut(msg: GatewayOutData): void {
 export function consumeOut(handler: (msg: GatewayOutData) => Promise<void> | void): void {
   bus.on('out', (msg: GatewayOutData) => {
     Promise.resolve(handler(msg)).catch((err) => console.error('consumeOut handler error:', err));
+  });
+}
+
+// Beacon envelope queue API (generalized lifecycle)
+export function enqueueBeacon(msg: BeaconMessage): void {
+  queueMicrotask(() => bus.emit('beacon', msg));
+}
+
+export function consumeBeacon(handler: (msg: BeaconMessage) => Promise<void> | void): void {
+  bus.on('beacon', (msg: BeaconMessage) => {
+    Promise.resolve(handler(msg)).catch((err) => console.error('consumeBeacon handler error:', err));
   });
 }

@@ -1,7 +1,8 @@
 import qrcode from 'qrcode-terminal';
 import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
-import { consumeOut, enqueueIn } from '../../queues';
-import type { GatewayInData, GatewayOutData } from '../../types';
+import { consumeOut, enqueueBeacon } from '../../queues';
+import type { GatewayOutData, BeaconMessage } from '../../types';
+import { getEnv, toBeaconMessage } from '../../types';
 import { getEnv } from '../../types';
 
 function resolveContactName(contact: any): string | undefined {
@@ -56,16 +57,36 @@ export function startWhatsAppAdapter() {
         chatName = (chat as any)?.name || undefined;
       } catch {}
 
-      const inMsg: GatewayInData = {
+      // Build a beacon envelope capturing both normalized and raw data
+      const rawSnapshot = {
+        provider: 'whatsapp',
+        id: msg.id,
         from: msg.from,
-        contact: contactName,
-        chat: chatName,
+        to: msg.to,
         body: msg.body,
         hasMedia: msg.hasMedia,
-        originalMessageId: msg.id?.id,
-        gateway: { npub: GATEWAY_NPUB, type: 'whatsapp' },
+        timestamp: (msg as any)?.timestamp,
+        ack: (msg as any)?.ack,
+        deviceType: (msg as any)?.deviceType,
+        type: (msg as any)?.type,
+        author: (msg as any)?.author,
+        mentionedIds: (msg as any)?.mentionedIds,
+        quotedMsgId: (msg as any)?._data?.quotedMsgId || (msg as any)?._data?.quotedStanzaID,
+        chat: chatName,
+        contact: contactName,
       };
-      enqueueIn(inMsg);
+
+      const beacon: BeaconMessage = toBeaconMessage(
+        rawSnapshot,
+        { npub: GATEWAY_NPUB, type: 'whatsapp' },
+        {
+          from: msg.from,
+          messageId: msg.id?.id,
+          text: msg.body,
+          hasMedia: msg.hasMedia,
+        }
+      );
+      enqueueBeacon(beacon);
     } catch (e) {
       console.error('[whatsapp] error handling message:', e);
     }

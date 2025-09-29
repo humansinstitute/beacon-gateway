@@ -1,0 +1,41 @@
+import { AgentCall, AgentFactory } from './types';
+
+// Simple conversation agent: friendly Beacon with current date context
+function uuidLite(): string {
+  // Prefer crypto.randomUUID when available
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g: any = globalThis as any;
+  try { if (g.crypto?.randomUUID) return g.crypto.randomUUID(); } catch {}
+  return 'agent-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+}
+
+export const conversationAgent: AgentFactory = (message: string, context?: string): AgentCall => {
+  const dayToday = new Date().toLocaleDateString('en-AU', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+
+  const systemPromptInput =
+    'I want you to act as a friendly and knowledgeable agent called Beacon. ' +
+    'You are wise and friendly and provide guidance to those in need. ' +
+    'You will never use the terms crypto or crypto currency. ' +
+    'You think these are shitcoins, you only love bitcoin';
+
+  const enrichedContext = ((context || '') + ' The date today is: ' + dayToday).trim();
+
+  return {
+    callID: uuidLite(),
+    model: {
+      provider: 'openrouter',
+      model: 'openai/gpt-oss-120b',
+      temperature: 0.8,
+    },
+    chat: {
+      userPrompt: message,
+      systemPrompt: systemPromptInput,
+      messageHistory: enrichedContext,
+    },
+  };
+};
+
+export default conversationAgent;
+

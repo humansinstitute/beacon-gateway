@@ -32,8 +32,10 @@ export type QuickResponseOptions = {
   model?: string;
   /** Optional API key override; otherwise reads OPENROUTER_API_KEY from env */
   apiKey?: string;
-  /** Optional request timeout ms; defaults to 10000 */
+  /** Optional request timeout ms; defaults to 60000 */
   timeoutMs?: number;
+  /** Optional temperature for model (0..1) */
+  temperature?: number;
 };
 
 /**
@@ -52,7 +54,8 @@ export async function quickResponse(
 
   // Default model and timeout
   const model = opts.model ?? 'openai/gpt-oss-120b';
-  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const temperature = opts.temperature;
 
   // Fixed system prompt requested by user
   const systemPrompt =
@@ -69,7 +72,7 @@ export async function quickResponse(
     timeoutMs,
   });
 
-  try {
+  const attempt = async () => {
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -80,6 +83,7 @@ export async function quickResponse(
       },
       body: JSON.stringify({
         model,
+        ...(typeof temperature === 'number' ? { temperature } : {}),
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: trimmed },
@@ -87,28 +91,64 @@ export async function quickResponse(
       }),
       signal: controller.signal,
     });
-
     if (!res.ok) {
       const text = await safeReadText(res);
       throw new Error(`OpenRouter HTTP ${res.status} ${res.statusText}: ${text}`);
     }
-
     const data = (await res.json()) as OpenRouterChatResponse;
-
     const choice = data.choices?.[0];
     const content = choice?.message?.content?.trim();
-
-    // Log basic completion metadata
-    console.log('[quick_response] response', {
-      model: data.model,
-      finish_reason: choice?.finish_reason,
-      usage: data.usage,
-    });
-
+    console.log('[quick_response] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage });
     if (!content) throw new Error('OpenRouter: empty content in response');
     return content;
+  };
+
+  try {
+    const started = Date.now();
+    try {
+      return await attempt();
+    } catch (err) {
+      const isAbort = err instanceof DOMException && err.name === 'AbortError';
+      if (!isAbort) throw err;
+      console.warn('[quick_response] attempt aborted; retrying once');
+      // Reset controller for retry
+      clearTimeout(timeout);
+      controller.abort();
+      const controller2 = new AbortController();
+      const timeout2 = setTimeout(() => controller2.abort(), timeoutMs);
+      // Re-run attempt with new controller
+      // Rebuild request using a small wrapper to substitute signal
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://beacon-gateway',
+          'X-Title': 'Beacon Gateway',
+        },
+        body: JSON.stringify({
+          model,
+          ...(typeof temperature === 'number' ? { temperature } : {}),
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: trimmed },
+          ],
+        }),
+        signal: controller2.signal,
+      });
+      if (!res.ok) {
+        const text = await safeReadText(res);
+        throw new Error(`OpenRouter HTTP ${res.status} ${res.statusText}: ${text}`);
+      }
+      const data = (await res.json()) as OpenRouterChatResponse;
+      const choice = data.choices?.[0];
+      const content = choice?.message?.content?.trim();
+      console.log('[quick_response] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage, retryMs: Date.now() - started });
+      if (!content) throw new Error('OpenRouter: empty content in response');
+      clearTimeout(timeout2);
+      return content;
+    }
   } catch (err) {
-    // Surface concise error and rethrow for caller
     const message = err instanceof Error ? err.message : String(err);
     console.error('[quick_response] error', { message });
     throw err;
@@ -128,3 +168,93 @@ async function safeReadText(res: Response): Promise<string> {
   }
 }
 
+// -------------------- Agent-driven variant --------------------
+
+import type { AgentCall, AgentFactory } from './agents/types';
+
+/**
+ * Calls OpenRouter using an Agent definition. Allows control over model, temperature, and prompts.
+ */
+export async function quickResponseWithAgent(
+  agentFactory: AgentFactory,
+  message: string,
+  context?: string,
+  opts: { apiKey?: string; timeoutMs?: number } = {}
+): Promise<string> {
+  const agent: AgentCall = await Promise.resolve(agentFactory(message, context));
+  if (!agent?.model?.model) throw new Error('quickResponseWithAgent: invalid agent configuration');
+
+  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error('quickResponseWithAgent: OPENROUTER_API_KEY not set');
+
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Compose messages from agent config
+  const messages: Array<{ role: 'system' | 'assistant' | 'user'; content: string }> = [
+    { role: 'system', content: agent.chat.systemPrompt },
+  ];
+  if (agent.chat.messageHistory) messages.push({ role: 'assistant', content: agent.chat.messageHistory });
+  messages.push({ role: 'user', content: agent.chat.userPrompt });
+
+  console.log('[quick_response] request', {
+    model: agent.model.model,
+    temperature: agent.model.temperature,
+    questionPreview: agent.chat.userPrompt.slice(0, 120),
+    timeoutMs,
+  });
+
+  const attempt = async (signal: AbortSignal) => {
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://beacon-gateway',
+        'X-Title': 'Beacon Gateway',
+      },
+      body: JSON.stringify({
+        model: agent.model.model,
+        ...(typeof agent.model.temperature === 'number' ? { temperature: agent.model.temperature } : {}),
+        messages,
+      }),
+      signal,
+    });
+    if (!res.ok) {
+      const text = await safeReadText(res);
+      throw new Error(`OpenRouter HTTP ${res.status} ${res.statusText}: ${text}`);
+    }
+    const data = (await res.json()) as OpenRouterChatResponse;
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content?.trim();
+    console.log('[quick_response] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage });
+    if (!content) throw new Error('OpenRouter: empty content in response');
+    return content;
+  };
+
+  try {
+    const started = Date.now();
+    try {
+      return await attempt(controller.signal);
+    } catch (err) {
+      const isAbort = err instanceof DOMException && err.name === 'AbortError';
+      if (!isAbort) throw err;
+      console.warn('[quick_response] attempt aborted; retrying once');
+      clearTimeout(timeout);
+      controller.abort();
+      const controller2 = new AbortController();
+      const timeout2 = setTimeout(() => controller2.abort(), timeoutMs);
+      const result = await attempt(controller2.signal);
+      clearTimeout(timeout2);
+      console.log('[quick_response] retry succeeded', { durationMs: Date.now() - started });
+      return result;
+    }
+  } catch (err) {
+    const messageErr = err instanceof Error ? err.message : String(err);
+    console.error('[quick_response] error', { message: messageErr });
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
