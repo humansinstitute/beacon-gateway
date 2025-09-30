@@ -79,7 +79,13 @@ export function startBrainWorker() {
       }
 
       logAction(msg.beaconID, 'ai_request', { agent: 'conversation', preview: text.slice(0, 200) });
-      const answer = await quickResponseWithAgent(conversationAgent, text, undefined);
+      let historyContext: string | undefined;
+      try {
+        const { buildHistoryStringFromConversation } = await import('./conversation/historyString.util');
+        const h = buildHistoryStringFromConversation(msg.meta?.conversationID || '', 5);
+        if (h) historyContext = h;
+      } catch {}
+      const answer = await quickResponseWithAgent(conversationAgent, text, historyContext);
       logAction(msg.beaconID, 'ai_response', { answerPreview: answer.slice(0, 200) }, 'ok');
 
       // Populate response envelope
