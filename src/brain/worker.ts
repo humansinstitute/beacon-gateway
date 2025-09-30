@@ -6,15 +6,20 @@ import conversationAgent from './agents/conversationAgent.ts';
 import { routeIntent } from './intent_router';
 import { rememberInbound } from './beacon_store';
 import { triggerWingmanForBeacon } from './wingman.client';
-import { recordInboundMessage, logAction, setMessageResponse } from '../db';
+import { recordInboundMessage, logAction, createOutboundMessage } from '../db';
+import { checkConversation } from './checkConversation';
 
 export function startBrainWorker() {
   consumeBeacon(async (msg: BeaconMessage) => {
     try {
-      // Remember routing context for potential webhook responses
-      rememberInbound(msg);
-      // Persist inbound message
-      recordInboundMessage(msg);
+      // Resolve conversation
+      const conv = await checkConversation({ replyToMessageId: undefined });
+      msg.meta = msg.meta || {};
+      msg.meta.conversationID = conv.conversationId;
+
+      // Persist inbound message and remember routing context
+      const inboundMessageId = recordInboundMessage(msg);
+      rememberInbound(msg, inboundMessageId);
 
       // Determine input text for quick response
       let text = (msg.source.text || '').trim();
@@ -51,10 +56,25 @@ export function startBrainWorker() {
           gateway: { ...msg.source.gateway },
         };
 
-        const out: GatewayOutData = toGatewayOut(msg);
-        console.log('[brain] enqueue outbound message:', out);
+        // Create outbound message + delivery (queued)
+        const { messageId, deliveryId } = createOutboundMessage({
+          conversationId: msg.meta?.conversationID || '',
+          replyToMessageId: inboundMessageId,
+          role: 'beacon',
+          userNpub: msg.meta?.userNpub || null,
+          content: {
+            text: answer,
+            to: msg.source.from || '',
+            quotedMessageId: msg.source.messageId,
+            beaconId: msg.beaconID,
+          },
+          metadata: { gateway: msg.source.gateway },
+          channel: msg.source.gateway.type,
+        });
+
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
+        console.log('[brain] enqueue outbound message:', { ...out });
         enqueueOut(out);
-        setMessageResponse(msg.beaconID, answer, 'preset');
         return;
       }
 
@@ -71,14 +91,28 @@ export function startBrainWorker() {
       };
 
       // For now, convert to legacy outbound for adapters
-      const out: GatewayOutData = toGatewayOut(msg);
-      console.log('[brain] enqueue outbound message:', out);
+      // Create outbound message + delivery (queued)
+      const { messageId, deliveryId } = createOutboundMessage({
+        conversationId: msg.meta?.conversationID || '',
+        replyToMessageId: inboundMessageId,
+        role: 'beacon',
+        userNpub: msg.meta?.userNpub || null,
+        content: {
+          text: answer,
+          to: msg.source.from || '',
+          quotedMessageId: msg.source.messageId,
+          beaconId: msg.beaconID,
+        },
+        metadata: { gateway: msg.source.gateway },
+        channel: msg.source.gateway.type,
+      });
+
+      const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
+      console.log('[brain] enqueue outbound message:', { ...out });
       enqueueOut(out);
-      setMessageResponse(msg.beaconID, answer, 'ai');
     } catch (err) {
       console.error('[brain] error handling beacon message:', { beaconID: msg.beaconID, err });
       logAction(msg.beaconID, 'error', { message: String((err as Error)?.message || err) }, 'failed');
-      setMessageResponse(msg.beaconID, null, null, String((err as Error)?.message || err));
     }
   });
   console.log('[brain] worker started (intent_router + wingman)');

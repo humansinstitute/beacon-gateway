@@ -3,7 +3,8 @@ import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
 import { consumeOut, enqueueBeacon } from '../../queues';
 import type { GatewayOutData, BeaconMessage } from '../../types';
 import { getEnv, toBeaconMessage } from '../../types';
-import { getEnv } from '../../types';
+import { transitionDelivery } from '../../db';
+import { resolveUserNpub } from '../npubMap';
 
 function resolveContactName(contact: any): string | undefined {
   const candidate = (
@@ -86,6 +87,9 @@ export function startWhatsAppAdapter() {
           hasMedia: msg.hasMedia,
         }
       );
+      // Map gateway user to a canonical user npub via local DB mapping (if present)
+      const mapped = resolveUserNpub('whatsapp', GATEWAY_NPUB, msg.from);
+      if (mapped) beacon.meta.userNpub = mapped;
       enqueueBeacon(beacon);
     } catch (e) {
       console.error('[whatsapp] error handling message:', e);
@@ -104,16 +108,34 @@ export function startWhatsAppAdapter() {
         media: !!out.mediaBase64,
         mediaMime: out.mediaMime,
         quotedMessageId: out.quotedMessageId,
+        deliveryId: out.deliveryId,
         gateway: out.gateway,
       });
-      if (out.mediaBase64) {
-        const media = new MessageMedia(out.mediaMime || 'application/octet-stream', out.mediaBase64);
-        await client.sendMessage(out.to, media, { caption: out.body || undefined, quotedMessageId: out.quotedMessageId });
-      } else {
-        await client.sendMessage(out.to, out.body || '', { quotedMessageId: out.quotedMessageId });
+      const sendResult = await (async () => {
+        if (out.mediaBase64) {
+          const media = new MessageMedia(out.mediaMime || 'application/octet-stream', out.mediaBase64);
+          return client.sendMessage(out.to, media, { caption: out.body || undefined, quotedMessageId: out.quotedMessageId });
+        } else {
+          return client.sendMessage(out.to, out.body || '', { quotedMessageId: out.quotedMessageId });
+        }
+      })();
+      try {
+        if (out.deliveryId) {
+          const providerId = (sendResult as any)?.id?.id || (sendResult as any)?.id?._serialized || undefined;
+          transitionDelivery(out.deliveryId, 'sent', { providerMessageId: providerId });
+        }
+      } catch (e) {
+        console.warn('[whatsapp] delivery transition failed:', e);
       }
     } catch (err) {
       console.error('[whatsapp] send failed:', err);
+      try {
+        if (out.deliveryId) {
+          transitionDelivery(out.deliveryId, 'failed', { errorMessage: String((err as Error)?.message || err) });
+        }
+      } catch (e) {
+        console.warn('[whatsapp] delivery fail transition error:', e);
+      }
     }
   });
 

@@ -21,65 +21,202 @@ export function getDB() {
 }
 
 function migrate(db: Database) {
-  db.exec(`
-  CREATE TABLE IF NOT EXISTS messages (
-    beacon_id TEXT PRIMARY KEY,
-    conversation_id TEXT,
-    created_at INTEGER DEFAULT (strftime('%s','now')),
-    responded_at INTEGER NULL,
-    gateway_type TEXT,
-    gateway_npub TEXT,
-    from_jid TEXT,
-    provider_message_id TEXT,
-    message_text TEXT NOT NULL,
-    response_text TEXT NULL,
-    response_type TEXT NULL,
-    response_error TEXT NULL,
-    has_media INTEGER,
-    media_meta_json TEXT NULL,
-    source_json TEXT NOT NULL,
-    meta_json TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_messages_conv_time ON messages(conversation_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_jid);
-  CREATE INDEX IF NOT EXISTS idx_messages_gateway ON messages(gateway_npub);
+  // One-time destructive migration controlled via _meta.schema_version
+  db.exec(`CREATE TABLE IF NOT EXISTS _meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`);
+  const getMeta = db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`).get.bind(db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`));
+  let current: string | null = null;
+  try {
+    const row = db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`).get() as any;
+    current = row?.v || null;
+  } catch {}
+  const target = '3';
+  const needsReset = current !== target;
 
-  CREATE TABLE IF NOT EXISTS actions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    beacon_id TEXT NOT NULL,
-    created_at INTEGER DEFAULT (strftime('%s','now')),
-    type TEXT NOT NULL,
-    status TEXT NULL,
-    payload_json TEXT NOT NULL,
-    FOREIGN KEY (beacon_id) REFERENCES messages(beacon_id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_actions_beacon_time ON actions(beacon_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_actions_type ON actions(type);
-  `);
+  if (needsReset) {
+    db.exec(`
+    PRAGMA foreign_keys=OFF;
+    DROP TABLE IF EXISTS message_delivery;
+    DROP TABLE IF EXISTS messages;
+    DROP TABLE IF EXISTS actions;
+    DROP TABLE IF EXISTS local_npub_map;
+    PRAGMA foreign_keys=ON;
+    `);
+
+    db.exec(`
+    -- Core messages table (every item is a first-class message)
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      reply_to_message_id TEXT NULL REFERENCES messages(id) ON DELETE SET NULL,
+      direction TEXT NOT NULL CHECK (direction IN ('inbound','outbound')),
+      role TEXT NOT NULL CHECK (role IN ('user','beacon','system')),
+      user_npub TEXT NULL,
+      content_json TEXT NOT NULL,
+      attachments_json TEXT NULL,
+      metadata_json TEXT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_conv_time ON messages(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_message_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+    CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_npub);
+
+    -- Delivery table (only for outbound messages)
+    CREATE TABLE IF NOT EXISTS message_delivery (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('queued','sent','failed','canceled')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      provider_message_id TEXT NULL,
+      error_code TEXT NULL,
+      error_message TEXT NULL,
+      queued_at INTEGER NULL,
+      sent_at INTEGER NULL,
+      failed_at INTEGER NULL,
+      canceled_at INTEGER NULL,
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_delivery_status ON message_delivery(status);
+    CREATE INDEX IF NOT EXISTS idx_delivery_channel_status ON message_delivery(channel, status);
+    CREATE INDEX IF NOT EXISTS idx_delivery_updated ON message_delivery(updated_at);
+
+    -- Keep actions table for lightweight audit logging
+    CREATE TABLE IF NOT EXISTS actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      beacon_id TEXT NOT NULL,
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      type TEXT NOT NULL,
+      status TEXT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_actions_beacon_time ON actions(beacon_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_actions_type ON actions(type);
+
+    -- Local user npub mapping (dev/local)
+    CREATE TABLE IF NOT EXISTS local_npub_map (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      gateway_type TEXT NOT NULL,
+      gateway_npub TEXT NOT NULL,
+      gateway_user TEXT NOT NULL,
+      user_npub TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      UNIQUE (gateway_type, gateway_npub, gateway_user)
+    );
+    `);
+
+    const upsert = db.query(`INSERT INTO _meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`);
+    upsert.run(target);
+  } else {
+    // Ensure required tables exist for safety in case of partial state
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        reply_to_message_id TEXT NULL REFERENCES messages(id) ON DELETE SET NULL,
+        direction TEXT NOT NULL CHECK (direction IN ('inbound','outbound')),
+        role TEXT NOT NULL CHECK (role IN ('user','beacon','system')),
+        user_npub TEXT NULL,
+        content_json TEXT NOT NULL,
+        attachments_json TEXT NULL,
+        metadata_json TEXT NULL,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+      CREATE TABLE IF NOT EXISTS message_delivery (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        channel TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued','sent','failed','canceled')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        provider_message_id TEXT NULL,
+        error_code TEXT NULL,
+        error_message TEXT NULL,
+        queued_at INTEGER NULL,
+        sent_at INTEGER NULL,
+        failed_at INTEGER NULL,
+        canceled_at INTEGER NULL,
+        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+      CREATE TABLE IF NOT EXISTS actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        beacon_id TEXT NOT NULL,
+        created_at INTEGER DEFAULT (strftime('%s','now')),
+        type TEXT NOT NULL,
+        status TEXT NULL,
+        payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_messages_conv_time ON messages(conversation_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_message_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+      CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_npub);
+      CREATE INDEX IF NOT EXISTS idx_delivery_status ON message_delivery(status);
+      CREATE INDEX IF NOT EXISTS idx_delivery_channel_status ON message_delivery(channel, status);
+      CREATE INDEX IF NOT EXISTS idx_delivery_updated ON message_delivery(updated_at);
+      CREATE INDEX IF NOT EXISTS idx_actions_beacon_time ON actions(beacon_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_actions_type ON actions(type);
+      CREATE TABLE IF NOT EXISTS local_npub_map (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gateway_type TEXT NOT NULL,
+        gateway_npub TEXT NOT NULL,
+        gateway_user TEXT NOT NULL,
+        user_npub TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        UNIQUE (gateway_type, gateway_npub, gateway_user)
+      );
+    `);
+  }
+
+  // Ensure actions table does not carry stale foreign keys from legacy schema
+  try {
+    const fkStmt = db.query(`PRAGMA foreign_key_list(actions)`);
+    const fks = fkStmt.all() as any[];
+    if (fks && fks.length > 0) {
+      db.exec(`DROP TABLE IF EXISTS actions;`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS actions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          beacon_id TEXT NOT NULL,
+          created_at INTEGER DEFAULT (strftime('%s','now')),
+          type TEXT NOT NULL,
+          status TEXT NULL,
+          payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_actions_beacon_time ON actions(beacon_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_actions_type ON actions(type);
+      `);
+    }
+  } catch {}
 }
 
-export function recordInboundMessage(m: import('../types').BeaconMessage) {
+export function recordInboundMessage(m: import('../types').BeaconMessage): string {
   const db = getDB();
-  const sourceJson = JSON.stringify(m.source);
-  const metaJson = JSON.stringify(m.meta || {});
+  const id = genId();
+  const conversationId = (m.meta?.conversationID || '') as string;
+  const userNpub = (m.meta?.userNpub || null) as string | null;
+  const content = {
+    text: (m.source.text || '').toString(),
+    from: m.source.from || null,
+    providerMessageId: m.source.messageId || null,
+  };
+  const metadata = {
+    gateway: m.source.gateway,
+    source: safeStringified(m.source.messageData),
+    meta: m.meta || {},
+    hasMedia: !!m.source.hasMedia,
+  };
   const stmt = db.query(`
-    INSERT OR IGNORE INTO messages (
-      beacon_id, conversation_id, gateway_type, gateway_npub, from_jid, provider_message_id,
-      message_text, has_media, source_json, meta_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (
+      id, conversation_id, reply_to_message_id, direction, role, user_npub, content_json, attachments_json, metadata_json
+    ) VALUES (?, ?, NULL, 'inbound', 'user', ?, ?, NULL, ?)
   `);
   stmt.run(
-    m.beaconID,
-    m.meta?.conversationID || null,
-    m.source.gateway.type,
-    m.source.gateway.npub,
-    m.source.from || null,
-    m.source.messageId || null,
-    (m.source.text || '').toString(),
-    m.source.hasMedia ? 1 : 0,
-    sourceJson,
-    metaJson,
+    id,
+    conversationId,
+    userNpub,
+    JSON.stringify(content),
+    JSON.stringify(metadata),
   );
+  return id;
 }
 
 export function logAction(beaconID: string, type: string, payload: unknown, status?: string) {
@@ -88,22 +225,123 @@ export function logAction(beaconID: string, type: string, payload: unknown, stat
   stmt.run(beaconID, type, status || null, JSON.stringify(payload ?? {}));
 }
 
-export function setMessageResponse(
-  beaconID: string,
-  responseText: string | null,
-  responseType: string | null,
-  error?: string | null,
-) {
+// Outbound creation (message + delivery queued)
+export function createOutboundMessage(params: {
+  conversationId: string;
+  replyToMessageId?: string | null;
+  role?: 'beacon' | 'system';
+  userNpub?: string | null;
+  content: { text?: string; to?: string; quotedMessageId?: string | null } & Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  channel: string; // e.g., 'whatsapp'
+}): { messageId: string; deliveryId: string } {
   const db = getDB();
-  if (responseText != null && responseType) {
-    const stmt = db.query(`
-      UPDATE messages SET response_text = ?, response_type = ?, responded_at = strftime('%s','now'), response_error = NULL
-      WHERE beacon_id = ?
-    `);
-    stmt.run(responseText, responseType, beaconID);
-  } else if (error) {
-    const stmt = db.query(`UPDATE messages SET response_error = ? WHERE beacon_id = ?`);
-    stmt.run(error, beaconID);
-  }
+  const messageId = genId();
+  const deliveryId = genId();
+  const now = nowSeconds();
+  const stmtMsg = db.query(`
+    INSERT INTO messages (id, conversation_id, reply_to_message_id, direction, role, user_npub, content_json, attachments_json, metadata_json)
+    VALUES (?, ?, ?, 'outbound', ?, ?, ?, NULL, ?)
+  `);
+  stmtMsg.run(
+    messageId,
+    params.conversationId,
+    params.replyToMessageId || null,
+    params.role || 'beacon',
+    params.userNpub || null,
+    JSON.stringify(params.content || {}),
+    JSON.stringify(params.metadata || {}),
+  );
+  const stmtDel = db.query(`
+    INSERT INTO message_delivery (id, message_id, channel, status, attempts, queued_at, updated_at)
+    VALUES (?, ?, ?, 'queued', 1, ?, ?)
+  `);
+  stmtDel.run(
+    deliveryId,
+    messageId,
+    params.channel,
+    now,
+    now,
+  );
+  return { messageId, deliveryId };
 }
 
+export function transitionDelivery(
+  deliveryId: string,
+  status: 'sent' | 'failed' | 'canceled',
+  options?: { providerMessageId?: string; errorCode?: string; errorMessage?: string }
+): void {
+  const db = getDB();
+  const now = nowSeconds();
+  let setCols = `status = ?, updated_at = ?`;
+  const vals: any[] = [status, now];
+  if (status === 'sent') { setCols += `, sent_at = ?`; vals.push(now); }
+  if (status === 'failed') { setCols += `, failed_at = ?`; vals.push(now); }
+  if (status === 'canceled') { setCols += `, canceled_at = ?`; vals.push(now); }
+  if (options?.providerMessageId) { setCols += `, provider_message_id = ?`; vals.push(options.providerMessageId); }
+  if (options?.errorCode) { setCols += `, error_code = ?`; vals.push(options.errorCode); }
+  if (options?.errorMessage) { setCols += `, error_message = ?`; vals.push(options.errorMessage); }
+  const stmt = db.query(`UPDATE message_delivery SET ${setCols} WHERE id = ?`);
+  stmt.run(...vals, deliveryId);
+}
+
+export function getConversationMessages(conversationId: string, limit = 100, before?: number, after?: number) {
+  const db = getDB();
+  let where = `conversation_id = ?`;
+  const params: any[] = [conversationId];
+  if (before) { where += ` AND created_at < ?`; params.push(before); }
+  if (after) { where += ` AND created_at > ?`; params.push(after); }
+  const sql = `SELECT * FROM messages WHERE ${where} ORDER BY created_at ASC LIMIT ?`;
+  params.push(limit);
+  const rows = db.query(sql).all(...params) as any[];
+  return rows.map(hydrateMessageRow);
+}
+
+export function getMessageById(id: string) {
+  const db = getDB();
+  const row = db.query(`SELECT * FROM messages WHERE id = ?`).get(id) as any;
+  return row ? hydrateMessageRow(row) : null;
+}
+
+export function getReplies(messageId: string) {
+  const db = getDB();
+  const rows = db.query(`SELECT * FROM messages WHERE reply_to_message_id = ? ORDER BY created_at ASC`).all(messageId) as any[];
+  return rows.map(hydrateMessageRow);
+}
+
+export function getDeliveryById(id: string) {
+  const db = getDB();
+  const row = db.query(`SELECT * FROM message_delivery WHERE id = ?`).get(id) as any;
+  return row || null;
+}
+
+// -------------------- helpers --------------------
+function genId(): string {
+  try { return (globalThis as any).crypto?.randomUUID?.() ?? ''; } catch {}
+  return 'id_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function nowSeconds(): number { return Math.floor(Date.now() / 1000); }
+
+function safeStringified(s: string): string {
+  try { JSON.parse(s); return s; } catch { return JSON.stringify({ raw: s }); }
+}
+
+function hydrateMessageRow(row: any) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    replyToMessageId: row.reply_to_message_id,
+    direction: row.direction,
+    role: row.role,
+    content: parseJSON(row.content_json),
+    attachments: parseJSON(row.attachments_json),
+    metadata: parseJSON(row.metadata_json),
+    createdAt: row.created_at,
+  };
+}
+
+function parseJSON(s: string | null) {
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { return null; }
+}

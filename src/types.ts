@@ -23,6 +23,9 @@ export interface GatewayOutData {
   mediaBase64?: string;
   mediaMime?: string;
   quotedMessageId?: string;
+  // Delivery tracking (optional; present when persisted as outbound message)
+  deliveryId?: string;
+  messageId?: string;
   gateway: GatewayInfo;
 }
 

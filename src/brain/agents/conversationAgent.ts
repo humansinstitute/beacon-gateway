@@ -26,7 +26,7 @@ export const conversationAgent: AgentFactory = (message: string, context?: strin
     callID: uuidLite(),
     model: {
       provider: 'openrouter',
-      model: 'openai/gpt-oss-120b',
+      model: 'openai/gpt-oss-120b', //moonshotai/kimi-k2-0905
       temperature: 0.8,
     },
     chat: {

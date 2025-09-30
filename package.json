@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun run src/start.ts",
     "start": "bun run src/start.ts",
+    "npub-map": "bun run src/cli/npub-map.ts",
     
     "start:all": "bun run src/start.ts",
     "dev:all": "bun --watch src/start.ts",
