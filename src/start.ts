@@ -22,6 +22,7 @@ function main() {
   // Start brain worker
   startBrainWorker();
 
+
   // Minimal HTTP server for health and webhooks
   const port = parseInt(getEnv('PORT', '3009') || '3009', 10);
 
