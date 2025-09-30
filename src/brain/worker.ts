@@ -12,16 +12,7 @@ import { checkConversation } from './checkConversation';
 export function startBrainWorker() {
   consumeBeacon(async (msg: BeaconMessage) => {
     try {
-      // Resolve conversation
-      const conv = await checkConversation({ replyToMessageId: undefined });
-      msg.meta = msg.meta || {};
-      msg.meta.conversationID = conv.conversationId;
-
-      // Persist inbound message and remember routing context
-      const inboundMessageId = recordInboundMessage(msg);
-      rememberInbound(msg, inboundMessageId);
-
-      // Determine input text for quick response
+      // Determine input text early for conversation analysis
       let text = (msg.source.text || '').trim();
       if (!text) {
         try {
@@ -35,6 +26,15 @@ export function startBrainWorker() {
         console.log('[brain] no text to respond with for beaconID:', msg.beaconID);
         return;
       }
+
+      // Resolve conversation (use analyst when not a reply)
+      const conv = await checkConversation({ replyToMessageId: undefined, userNpub: msg.meta?.userNpub || null, messageText: text });
+      msg.meta = msg.meta || {};
+      msg.meta.conversationID = conv.conversationId;
+
+      // Persist inbound message and remember routing context
+      const inboundMessageId = recordInboundMessage(msg);
+      rememberInbound(msg, inboundMessageId);
 
       // Route by intent (simple rules); default falls back to AI
       const route = routeIntent(text);
