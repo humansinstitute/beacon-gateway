@@ -39,6 +39,25 @@ export function startBrainWorker() {
         return; // wingman webhook will deliver the response
       }
 
+      // If router returned a preset default text (e.g., for "pay" heuristic), send it directly.
+      if ((route as any).type === 'default_with_text') {
+        const answer = (route as any).text as string;
+        logAction(msg.beaconID, 'preset_response', { answerPreview: answer.slice(0, 200) }, 'ok');
+
+        msg.response = {
+          to: msg.source.from || '',
+          text: answer,
+          quotedMessageId: msg.source.messageId,
+          gateway: { ...msg.source.gateway },
+        };
+
+        const out: GatewayOutData = toGatewayOut(msg);
+        console.log('[brain] enqueue outbound message:', out);
+        enqueueOut(out);
+        setMessageResponse(msg.beaconID, answer, 'preset');
+        return;
+      }
+
       logAction(msg.beaconID, 'ai_request', { agent: 'conversation', preview: text.slice(0, 200) });
       const answer = await quickResponseWithAgent(conversationAgent, text, undefined);
       logAction(msg.beaconID, 'ai_response', { answerPreview: answer.slice(0, 200) }, 'ok');
