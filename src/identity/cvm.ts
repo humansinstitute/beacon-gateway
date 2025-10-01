@@ -6,9 +6,10 @@ import { Client as McpClient } from "@modelcontextprotocol/sdk/client";
 import { ApplesauceRelayPool, NostrServerTransport, NostrClientTransport, PrivateKeySigner } from "@contextvm/sdk";
 import { z } from "zod";
 import { getEnv } from "../types";
-import { storePendingConfirmation, PendingPayment } from "./pending_store";
+import { PendingPayment } from "./pending_store";
 import { enqueueIdentityOut } from "./queues";
 import { getDB } from "../db";
+import { makePayment } from "./wallet_manager";
 
 // --- Configuration ---
 const RELAYS = ["wss://relay.contextvm.org", "wss://cvm.otherstuff.ai"];
@@ -44,48 +45,27 @@ function findGatewayUserByNpub(npub: string): string | null {
 }
 
 // --- CVM Client for Brain Communication ---
-
-/**
- * Sends the final payment confirmation back to the Brain's CVM server.
- * @param status The status of the payment ('paid' or 'rejected').
- * @param reason A descriptive reason for the status.
- * @param originalPaymentData The original data from the payment request.
- */
 export async function sendPaymentConfirmation(
   status: 'paid' | 'rejected',
   reason: string,
   originalPaymentData: PendingPayment
 ) {
   console.log(`[CVM Client] Sending payment confirmation for refId: ${originalPaymentData.refId}`);
-  
   const privateKey = getEnv('IDENTITY_CVM_PRIVATE_KEY', '');
   const brainPubKey = getEnv('BRAIN_CVM_PUBLIC_KEY', '').trim();
-
   if (!privateKey || privateKey.startsWith('YOUR_') || !brainPubKey || brainPubKey.startsWith('YOUR_')) {
     console.error('[CVM Client] FATAL: CVM keys for Identity (private) or Brain (public) are not set in .env.');
     return;
   }
-
   const signer = new PrivateKeySigner(privateKey);
   const relayPool = new ApplesauceRelayPool(RELAYS);
-
-  const clientTransport = new NostrClientTransport({
-    signer,
-    relayHandler: relayPool,
-    serverPubkey: brainPubKey,
-  });
-
-  const mcpClient = new McpClient({
-    name: "beacon-identity-client",
-    version: "1.0.0",
-  });
-
+  const clientTransport = new NostrClientTransport({ signer, relayHandler: relayPool, serverPubkey: brainPubKey });
+  const mcpClient = new McpClient({ name: "beacon-identity-client", version: "1.0.0" });
   try {
     await mcpClient.connect(clientTransport);
     console.log("[CVM Client] Connected to Brain CVM server.");
-
     const result = await mcpClient.callTool({
-      name: originalPaymentData.responseTool, // e.g., "confirmPayment"
+      name: originalPaymentData.responseTool,
       arguments: {
         status,
         reason,
@@ -93,7 +73,6 @@ export async function sendPaymentConfirmation(
         data: originalPaymentData,
       },
     });
-
     console.log("[CVM Client] Brain responded to confirmation:", result);
   } catch (error) {
     console.error("[CVM Client] Failed to send payment confirmation to Brain:", error);
@@ -103,8 +82,7 @@ export async function sendPaymentConfirmation(
   }
 }
 
-
-// --- CVM Server Logic ---
+// --- Main Server Logic ---
 export async function startCvmServer() {
   console.log('[CVM] Identity CVM Server starting...');
 
@@ -122,10 +100,11 @@ export async function startCvmServer() {
   console.log("[CVM] Connecting to relays...");
 
   const mcpServer = new McpServer({
-    name: "beacon-identity-server",
+    name: "Beacon Identity CVM Server",
     version: "1.0.0",
   });
 
+  // --- Tool Definitions ---
   mcpServer.registerTool(
     "payLnAddress",
     {
@@ -153,24 +132,39 @@ export async function startCvmServer() {
       
       markRefIdAsProcessed(args.refId);
 
-      console.log(`[CVM] Processing 'payLnAddress' for userJid: ${userJid}`);
-      storePendingConfirmation(userJid, { type: 'ln_address', ...args });
+      // --- TEMPORARY: AUTO-CONFIRMATION FOR TESTING ---
+      console.log(`[CVM] AUTO-CONFIRMING payment for ${userJid} for testing.`);
+      
+      const paymentDetails: PendingPayment = { type: 'ln_address', ...args, createdAt: Date.now() };
+      const result = await makePayment(paymentDetails);
 
-      const confirmationText = `Please confirm payment of ${args.amount} sats to ${args.lnAddress}.\n\nReply 'YES' to approve.`;
-      enqueueIdentityOut({
-        to: userJid,
-        body: confirmationText,
-        gateway: { type: 'whatsapp', npub: getEnv('GATEWAY_NPUB', '').trim() }
-      });
-
-      return { status: "pending_confirmation", details: "Payment request received. Awaiting user confirmation." };
+      if (result.success) {
+        const confirmationText = `(Auto-Confirmed) Payment successful! Receipt: ${result.receipt}`;
+        enqueueIdentityOut({
+          to: userJid,
+          body: confirmationText,
+          gateway: { type: 'whatsapp', npub: getEnv('GATEWAY_NPUB', '').trim() }
+        });
+        await sendPaymentConfirmation('paid', `Successful payment. Receipt: ${result.receipt}`, paymentDetails);
+        return { status: "paid", details: `Auto-confirmed and processed. Receipt: ${result.receipt}` };
+      } else {
+        const failureText = `(Auto-Confirmed) Payment failed: ${result.error}`;
+        enqueueIdentityOut({
+          to: userJid,
+          body: failureText,
+          gateway: { type: 'whatsapp', npub: getEnv('GATEWAY_NPUB', '').trim() }
+        });
+        await sendPaymentConfirmation('rejected', result.error || 'Payment failed', paymentDetails);
+        return { status: "rejected", details: `Auto-confirmed and failed. Reason: ${result.error}` };
+      }
+      // --- END OF TEMPORARY CODE ---
     }
   );
-
+  
   const serverTransport = new NostrServerTransport({
     signer,
     relayHandler: relayPool,
-    serverInfo: { name: "Beacon Identity CVM Server" },
+    server: mcpServer.server,
   });
 
   await mcpServer.connect(serverTransport);
