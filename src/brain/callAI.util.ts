@@ -206,6 +206,12 @@ export async function quickResponseWithAgent(
   });
 
   const attempt = async (signal: AbortSignal) => {
+    const providerRouting = agent.model.inference_provider
+      ? { provider: { order: [agent.model.inference_provider] } }
+      : undefined;
+    if (agent.model.inference_provider) {
+      console.log('[callAI] using inference provider:', agent.model.inference_provider);
+    }
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -217,6 +223,7 @@ export async function quickResponseWithAgent(
       body: JSON.stringify({
         model: agent.model.model,
         ...(typeof agent.model.temperature === 'number' ? { temperature: agent.model.temperature } : {}),
+        ...(providerRouting ? providerRouting : {}),
         messages,
       }),
       signal,

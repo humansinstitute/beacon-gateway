@@ -42,8 +42,9 @@ Today is ${dayToday}.`;
     callID: uuidLite(),
     model: {
       provider: 'openrouter',
-      model: 'openai/o4-mini-high',
-      temperature: 0.2,
+      model: 'moonshotai/kimi-k2-0905',
+      inference_provider: 'Groq',
+      temperature: 0.6,
     },
     chat: {
       userPrompt: message,

@@ -90,7 +90,8 @@ Output: {"type": "pay_ln_address", "parameters": {"amount": 1000, "recipient": "
     callID: uuidLite(),
     model: {
       provider: 'openrouter',
-      model: 'openai/o4-mini-high', // 'openai/gpt-oss-120b' 'moonshotai/kimi-k2-0905' 
+      model: 'moonshotai/kimi-k2-0905',
+      inference_provider: 'Groq',
       temperature: 0.6,
     },
     chat: {
@@ -102,4 +103,3 @@ Output: {"type": "pay_ln_address", "parameters": {"amount": 1000, "recipient": "
 };
 
 export default paymentExtract;
-

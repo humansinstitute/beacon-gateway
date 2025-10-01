@@ -18,8 +18,9 @@ export const convConsolidateAgent: AgentFactory = (message: string, context?: st
     callID: uuidLite(),
     model: {
       provider: 'openrouter',
-      model: 'openai/gpt-oss-120b',
-      temperature: 0.2,
+      model: 'moonshotai/kimi-k2-0905',
+      inference_provider: 'Groq',
+      temperature: 0.3,
     },
     chat: {
       userPrompt: message,
@@ -33,4 +34,3 @@ export const convConsolidateAgent: AgentFactory = (message: string, context?: st
 };
 
 export default convConsolidateAgent;
-
