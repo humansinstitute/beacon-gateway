@@ -8,6 +8,7 @@ import { z } from "zod";
 import { getEnv } from "../types";
 import { PendingPayment } from "./pending_store";
 import { enqueueIdentityOut } from "./queues";
+import { storePendingConfirmation, retrieveAndClearConfirmation } from "./pending_store";
 import { getDB } from "../db";
 import { makePayment } from "./wallet_manager";
 
@@ -29,7 +30,7 @@ function markRefIdAsProcessed(refId: string): void {
   setTimeout(() => processedRefIds.delete(refId), 5 * 60 * 1000); // 5 minute TTL
 }
 
-// --- DB Helper ---
+// --- DB Helpers ---
 function findGatewayUserByNpub(npub: string): string | null {
   try {
     const db = getDB();
@@ -40,6 +41,20 @@ function findGatewayUserByNpub(npub: string): string | null {
     return row?.gateway_user || null;
   } catch (err) {
     console.error(`[CVM] Database error looking up npub ${npub}:`, err);
+    return null;
+  }
+}
+
+function findGatewayUserByNpubForType(npub: string, gatewayType: 'web' | 'whatsapp'): string | null {
+  try {
+    const db = getDB();
+    const gatewayNpub = getEnv('GATEWAY_NPUB', '').trim();
+    const row = db.query(
+      `SELECT gateway_user FROM local_npub_map WHERE user_npub = ? AND gateway_npub = ? AND gateway_type = ? ORDER BY created_at DESC LIMIT 1`
+    ).get(npub, gatewayNpub, gatewayType) as any;
+    return row?.gateway_user || null;
+  } catch (err) {
+    console.error(`[CVM] DB error looking up npub ${npub} for ${gatewayType}:`, err);
     return null;
   }
 }
@@ -124,40 +139,75 @@ export async function startCvmServer() {
       if (isRefIdProcessed(args.refId)) {
         return { status: "error", details: "Duplicate request." };
       }
-      
-      const userJid = findGatewayUserByNpub(args.npub);
-      if (!userJid) {
-        return { status: "error", details: `User with npub ${args.npub} not found or not mapped.` };
+
+      // Prefer web gateway for approval; fall back to WhatsApp if no web mapping exists
+      const webUser = findGatewayUserByNpubForType(args.npub, 'web');
+      const waUser = findGatewayUserByNpubForType(args.npub, 'whatsapp') || findGatewayUserByNpub(args.npub);
+      console.log(`[CVM] Mapping lookup for npub ${args.npub}: webUser=${webUser || 'none'}, waUser=${waUser || 'none'}`);
+      const targetUser = webUser || waUser;
+      const targetGateway: 'web' | 'whatsapp' | null = webUser ? 'web' : (waUser ? 'whatsapp' : null);
+      if (targetUser && targetGateway) {
+        console.log(`[CVM] Using ${targetGateway} for approval prompt to gatewayUser=${targetUser}`);
       }
-      
+      if (!targetUser || !targetGateway) {
+        console.error(`[CVM] No gateway mapping found for user npub ${args.npub}. Cannot prompt for approval.`);
+        return { status: "error", details: `User with npub ${args.npub} not found or not mapped to web/whatsapp.` };
+      }
+
+      // Idempotency guard
       markRefIdAsProcessed(args.refId);
 
-      // --- TEMPORARY: AUTO-CONFIRMATION FOR TESTING ---
-      console.log(`[CVM] AUTO-CONFIRMING payment for ${userJid} for testing.`);
-      
-      const paymentDetails: PendingPayment = { type: 'ln_address', ...args, createdAt: Date.now() };
-      const result = await makePayment(paymentDetails);
+      // Store pending and prompt for approval via the chosen gateway
+      const pending: Omit<PendingPayment, 'createdAt'> = { type: 'ln_address', ...args };
+      storePendingConfirmation(targetUser, pending);
 
-      if (result.success) {
-        const confirmationText = `(Auto-Confirmed) Payment successful! Receipt: ${result.receipt}`;
-        enqueueIdentityOut({
-          to: userJid,
-          body: confirmationText,
-          gateway: { type: 'whatsapp', npub: getEnv('GATEWAY_NPUB', '').trim() }
-        });
-        await sendPaymentConfirmation('paid', `Successful payment. Receipt: ${result.receipt}`, paymentDetails);
-        return { status: "paid", details: `Auto-confirmed and processed. Receipt: ${result.receipt}` };
-      } else {
-        const failureText = `(Auto-Confirmed) Payment failed: ${result.error}`;
-        enqueueIdentityOut({
-          to: userJid,
-          body: failureText,
-          gateway: { type: 'whatsapp', npub: getEnv('GATEWAY_NPUB', '').trim() }
-        });
-        await sendPaymentConfirmation('rejected', result.error || 'Payment failed', paymentDetails);
-        return { status: "rejected", details: `Auto-confirmed and failed. Reason: ${result.error}` };
+      const amountStr = (args.amount != null) ? `${args.amount} sats` : 'an amount';
+      const prompt = `Approve payment to Lightning Address '${args.lnAddress}' for ${amountStr}? Reply YES within 5 minutes to confirm.`;
+      enqueueIdentityOut({
+        to: targetUser,
+        body: prompt,
+        gateway: { type: targetGateway, npub: getEnv('GATEWAY_NPUB', '').trim() }
+      });
+      console.log(`[CVM] Enqueued approval prompt via ${targetGateway} to ${targetUser}`);
+
+      // Optional auto-approval after BEACON_AUTO seconds
+      const autoSecsRaw = (getEnv('BEACON_AUTO', '') || '').trim();
+      const autoSecs = Number.parseInt(autoSecsRaw, 10);
+      if (!Number.isNaN(autoSecs) && autoSecs > 0) {
+        console.log(`[CVM] Auto-approval enabled: will auto-approve in ${autoSecs}s if no user reply`);
+        setTimeout(async () => {
+          try {
+            // If the user already confirmed, this will return null (since worker consumed it)
+            const stillPending = retrieveAndClearConfirmation(targetUser);
+            if (!stillPending) {
+              console.log('[CVM] Auto-approval skipped: no pending request (likely user approved)');
+              return;
+            }
+            const result = await makePayment(stillPending);
+            if (result.success) {
+              enqueueIdentityOut({
+                to: targetUser,
+                body: `(Auto) Payment successful! Receipt: ${result.receipt}`,
+                gateway: { type: targetGateway, npub: getEnv('GATEWAY_NPUB', '').trim() }
+              });
+              await sendPaymentConfirmation('paid', `Auto-approved payment. Receipt: ${result.receipt}`, stillPending);
+              console.log('[CVM] Auto-approval completed: paid');
+            } else {
+              enqueueIdentityOut({
+                to: targetUser,
+                body: `(Auto) Payment failed: ${result.error}`,
+                gateway: { type: targetGateway, npub: getEnv('GATEWAY_NPUB', '').trim() }
+              });
+              await sendPaymentConfirmation('rejected', result.error || 'Auto-approved payment failed', stillPending);
+              console.log('[CVM] Auto-approval completed: rejected');
+            }
+          } catch (e) {
+            console.error('[CVM] Auto-approval timer error:', e);
+          }
+        }, autoSecs * 1000);
       }
-      // --- END OF TEMPORARY CODE ---
+
+      return { status: "pending", details: `Awaiting user confirmation via ${targetGateway}.` };
     }
   );
   

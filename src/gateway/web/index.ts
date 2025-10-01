@@ -1,5 +1,5 @@
 import { getEnv, toBeaconMessage, GatewayInfo } from '../../types';
-import { enqueueBeacon, consumeOut } from '../../queues';
+import { enqueueBeacon as brainEnqueueBeacon, consumeOut as brainConsumeOut } from '../../queues';
 import { resolveUserNpub } from '../npubMap';
 import { ensureMappedOrPrompt, UNKNOWN_USER_PROMPT } from '../unknownUser';
 import { transitionDelivery, getDB, createOutboundMessage, logAction } from '../../db';
@@ -18,7 +18,12 @@ function broadcast(event: string, payload: unknown) {
   }
 }
 
-export function startWebAdapter() {
+export function startWebAdapter(options?: {
+  enqueueBeacon?: (msg: import('../../types').BeaconMessage) => void;
+  consumeOut?: (handler: (msg: import('../../types').GatewayOutData) => Promise<void> | void) => void;
+}) {
+  const enqueueBeacon = options?.enqueueBeacon || brainEnqueueBeacon;
+  const consumeOut = options?.consumeOut || brainConsumeOut;
   const npub = getEnv('GATEWAY_NPUB', '');
   const webId = getEnv('WEBID', '');
   const port = parseInt(getEnv('WEB_PORT', '3010') || '3010', 10);
@@ -126,28 +131,34 @@ export function startWebAdapter() {
           const mapped = resolveUserNpub('web', npub, account);
           let rows: any[];
           if (mapped) {
+            // Include both mapped user messages and any records that explicitly reference the account in content
             rows = db
               .query(
                 `SELECT * FROM messages
-                 WHERE user_npub = ?
-                   AND metadata_json LIKE '%"type":"web"%'
+                 WHERE metadata_json LIKE '%"type":"web"%'
+                   AND (
+                     user_npub = ?
+                     OR content_json LIKE '%' || '"from":"' || ? || '"' || '%'
+                     OR content_json LIKE '%' || '"to":"' || ? || '"' || '%'
+                   )
                  ORDER BY created_at ASC
                  LIMIT ?`
               )
-              .all(mapped, limit) as any[];
+              .all(mapped, account, account, limit) as any[];
           } else {
-            // Fallback: LIKE filters to avoid JSON1
+            // Fallback: LIKE filters to avoid JSON1; parameterized to avoid string concat
             rows = db
               .query(
                 `SELECT * FROM messages
-                 WHERE (
-                   content_json LIKE ? OR content_json LIKE ?
-                 )
-                   AND metadata_json LIKE '%"type":"web"%'
+                 WHERE metadata_json LIKE '%"type":"web"%'
+                   AND (
+                     content_json LIKE '%' || '"from":"' || ? || '"' || '%'
+                     OR content_json LIKE '%' || '"to":"' || ? || '"' || '%'
+                   )
                  ORDER BY created_at ASC
                  LIMIT ?`
               )
-              .all(`%"from":"${account}"%`, `%"to":"${account}"%`, limit) as any[];
+              .all(account, account, limit) as any[];
           }
           const items = rows.map((r: any) => ({
             id: r.id,
@@ -197,15 +208,39 @@ export function startWebAdapter() {
   // Outbound consumer: deliver messages targeted to web
   consumeOut((msg) => {
     if (msg.gateway.type !== 'web') return;
-    broadcast('outbound', {
+    console.log('[web] outbound queued', { to: msg.to, hasDeliveryId: !!msg.deliveryId });
+    let deliveryId = msg.deliveryId;
+    let messageId = msg.messageId;
+    try {
+      if (!deliveryId) {
+        // Try to resolve canonical user npub for correct history joins
+        let userNpub: string | null = null;
+        try { userNpub = resolveUserNpub('web', npub, msg.to) || null; } catch {}
+        const rec = createOutboundMessage({
+          conversationId: '',
+          replyToMessageId: undefined,
+          role: 'beacon',
+          userNpub,
+          content: { text: msg.body || '', to: msg.to },
+          metadata: { gateway },
+          channel: gateway.type,
+        });
+        messageId = rec.messageId;
+        deliveryId = rec.deliveryId;
+      }
+    } catch {}
+
+    const broadcastPayload = {
       to: msg.to || null,
       text: msg.body,
       quotedMessageId: msg.quotedMessageId,
-      deliveryId: msg.deliveryId,
-      messageId: msg.messageId,
-    });
+      deliveryId,
+      messageId,
+    };
+    broadcast('outbound', broadcastPayload);
+    console.log('[web] outbound broadcast', broadcastPayload);
     try {
-      if (msg.deliveryId) transitionDelivery(msg.deliveryId, 'sent', { providerMessageId: 'web:' + (msg.messageId || '') });
+      if (deliveryId) transitionDelivery(deliveryId, 'sent', { providerMessageId: 'web:' + (messageId || '') });
     } catch {}
   });
 

@@ -1,5 +1,6 @@
 import { getEnv } from './types';
 import { startWhatsAppAdapter } from './gateway/whatsapp/adapter';
+import { startWebAdapter } from './gateway/web/index';
 import { startSignalAdapter } from './gateway/signal';
 import { startNostrAdapter } from './gateway/nostr';
 import { startMeshAdapter } from './gateway/mesh';
@@ -12,12 +13,33 @@ function main() {
   if (!npub) {
     console.warn('[identity_start] GATEWAY_NPUB is not set; WhatsApp adapter will still run but outbound filtering may be broad');
   }
+  // Feature flags for Identity service only
+  const enableWhatsApp = (() => {
+    const v = (getEnv('BEACON_ID_WHATSAPP', 'true') || '').toLowerCase().trim();
+    return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+  })();
+  const enableWeb = (() => {
+    const v = (getEnv('BEACON_ID_WEB', 'false') || '').toLowerCase().trim();
+    return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+  })();
 
-  // Start gateways, injecting the identity-specific queues for both inbound and outbound messages
-  startWhatsAppAdapter({
-    enqueueBeacon: enqueueIdentityBeacon,
-    consumeOut: consumeIdentityOut,
-  });
+  // Start gateways (Identity scope), injecting identity-specific queues
+  if (enableWhatsApp) {
+    startWhatsAppAdapter({
+      enqueueBeacon: enqueueIdentityBeacon,
+      consumeOut: consumeIdentityOut,
+    });
+  } else {
+    console.log('[identity_start] WhatsApp adapter disabled via BEACON_ID_WHATSAPP');
+  }
+  if (enableWeb) {
+    startWebAdapter({
+      enqueueBeacon: enqueueIdentityBeacon,
+      consumeOut: consumeIdentityOut,
+    });
+  } else {
+    console.log('[identity_start] Web adapter disabled via BEACON_ID_WEB');
+  }
   startSignalAdapter(); // Note: Other adapters could be refactored similarly if needed
   startNostrAdapter();
   startMeshAdapter();
@@ -32,7 +54,7 @@ function main() {
   startIdentityWorker();
 
   // Minimal HTTP server for health
-  const port = parseInt(getEnv('PORT', '3010') || '3010', 10);
+  const port = parseInt(getEnv('PORTID', '3011') || '3011', 10);
 
   const json = (data: any, code = 200) => new Response(JSON.stringify(data), {
     status: code,

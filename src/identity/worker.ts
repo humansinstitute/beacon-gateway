@@ -42,7 +42,7 @@ export function startIdentityWorker() {
           enqueueIdentityOut({
             to: userJid,
             body: confirmationText,
-            gateway: { type: 'whatsapp', npub: getEnv('GATEWAY_NPUB', '').trim() }
+            gateway: { type: msg.source.gateway.type, npub: getEnv('GATEWAY_NPUB', '').trim() }
           });
 
           // Step 3.4: Call the CVM client to send confirmation to the Brain.
@@ -54,7 +54,7 @@ export function startIdentityWorker() {
           enqueueIdentityOut({
             to: userJid,
             body: `Payment failed: ${result.error}`,
-            gateway: { type: 'whatsapp', npub: getEnv('GATEWAY_NPUB', '').trim() }
+            gateway: { type: msg.source.gateway.type, npub: getEnv('GATEWAY_NPUB', '').trim() }
           });
           await sendPaymentConfirmation('rejected', result.error || 'Payment failed for an unknown reason.', pendingPayment);
         }
