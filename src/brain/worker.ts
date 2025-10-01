@@ -8,6 +8,7 @@ import { rememberInbound } from './beacon_store';
 import { triggerWingmanForBeacon } from './wingman.client';
 import { recordInboundMessage, logAction, createOutboundMessage } from '../db';
 import { checkConversation } from './checkConversation';
+import { maybeConsolidate } from './conversation/consolidate.util';
 
 export function startBrainWorker() {
   consumeBeacon(async (msg: BeaconMessage) => {
@@ -34,12 +35,26 @@ export function startBrainWorker() {
 
       // Persist inbound message and remember routing context
       const inboundMessageId = recordInboundMessage(msg);
+
+      // Consolidate conversation state periodically and prepare history string
+      let historyString: string | undefined;
+      try {
+        const { summary, deltaSinceSummary } = await maybeConsolidate(msg.meta?.conversationID || '');
+        if (summary) {
+          if (deltaSinceSummary <= 1) {
+            historyString = `The previous message history is: ${summary}`;
+          } else {
+            // stale-ish summary; still useful
+            historyString = `Conversation summary: ${summary}`;
+          }
+        }
+      } catch {}
       rememberInbound(msg, inboundMessageId);
 
       // Route by intent (simple rules); default falls back to AI
       const route = routeIntent(text);
       if (route.type === 'wingman') {
-        const info = await triggerWingmanForBeacon(msg);
+        const info = await triggerWingmanForBeacon(msg, { historySummary: historyString });
         logAction(msg.beaconID, 'wingman_trigger', info, 'ok');
         return; // wingman webhook will deliver the response
       }
@@ -79,13 +94,7 @@ export function startBrainWorker() {
       }
 
       logAction(msg.beaconID, 'ai_request', { agent: 'conversation', preview: text.slice(0, 200) });
-      let historyContext: string | undefined;
-      try {
-        const { buildHistoryStringFromConversation } = await import('./conversation/historyString.util');
-        const h = buildHistoryStringFromConversation(msg.meta?.conversationID || '', 5);
-        if (h) historyContext = h;
-      } catch {}
-      const answer = await quickResponseWithAgent(conversationAgent, text, historyContext);
+      const answer = await quickResponseWithAgent(conversationAgent, text, historyString);
       logAction(msg.beaconID, 'ai_response', { answerPreview: answer.slice(0, 200) }, 'ok');
 
       // Populate response envelope
