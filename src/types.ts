@@ -1,4 +1,4 @@
-export type GatewayType = 'whatsapp' | 'signal' | 'nostr' | 'mesh';
+export type GatewayType = 'whatsapp' | 'signal' | 'nostr' | 'mesh' | 'web';
 
 export interface GatewayInfo {
   npub: string;
