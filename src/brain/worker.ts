@@ -65,23 +65,25 @@ export function startBrainWorker() {
       if ((route as any).type === 'default_with_text') {
         // Trigger CVM pay flow with hardcoded args when user intent starts with "pay"
         try {
+          const lnAddress = 'noah@sats.com';
+          const amount = 256;
           const responsePubkey = getEnv('BEACON_BRAIN_HEX_PUB', '').trim() ||
             'caabbef036b063f6b29e8bc79f723aae8fb8eddc56fe198f150bae6a01741ee3';
           await cvmPayLnAddress({
             npub: 'npub1hs7h7pfsdeqxmhkk9vmutuqs0vztv503c4ve6wlq3nn2a58w6cfss9sus3',
             refId: msg.beaconID,
-            lnAddress: 'noah@sats.com',
-            amount: 256,
+            lnAddress,
+            amount,
             responsePubkey,
             responseTool: 'confirmPayment',
           });
-          logAction(msg.beaconID, 'cvm_payLnAddress', { lnAddress: 'noah@sats.com', amount: 256, responsePubkey: responsePubkey.slice(0,8) + '…' }, 'sent');
+          logAction(msg.beaconID, 'cvm_payLnAddress', { lnAddress, amount, responsePubkey: responsePubkey.slice(0,8) + '…' }, 'sent');
         } catch (err) {
           console.error('[brain] cvm payLnAddress error', { beaconID: msg.beaconID, err });
           logAction(msg.beaconID, 'cvm_payLnAddress', { error: String((err as Error)?.message || err) }, 'failed');
         }
 
-        const answer = (route as any).text as string;
+        const answer = `I sent a request to your Beacon ID to pay noah@sats.com 256 sats. Just waiting on confirmation.`;
         logAction(msg.beaconID, 'preset_response', { answerPreview: answer.slice(0, 200) }, 'ok');
 
         msg.response = {
