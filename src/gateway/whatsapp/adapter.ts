@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-terminal';
 import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
-import { consumeOut, enqueueBeacon } from '../../queues';
+import { consumeOut as brainConsumeOut, enqueueBeacon as brainEnqueueBeacon } from '../../queues';
 import type { GatewayOutData, BeaconMessage } from '../../types';
 import { getEnv, toBeaconMessage } from '../../types';
 import { transitionDelivery } from '../../db';
@@ -14,7 +14,16 @@ function resolveContactName(contact: any): string | undefined {
   return contact?.number || contact?.id?.user || undefined;
 }
 
-export function startWhatsAppAdapter() {
+// MODIFICATION: This function now accepts optional enqueueBeacon and consumeOut functions.
+// This allows the caller (e.g., the Brain or Identity service) to inject its own
+// queueing functions, ensuring messages are routed to/from the correct service processor.
+// It defaults to the original brain queues for backward compatibility.
+export function startWhatsAppAdapter(options?: {
+  enqueueBeacon?: (msg: BeaconMessage) => void;
+  consumeOut?: (handler: (out: GatewayOutData) => Promise<void> | void) => void;
+}) {
+  const enqueueBeacon = options?.enqueueBeacon || brainEnqueueBeacon;
+  const consumeOut = options?.consumeOut || brainConsumeOut;
   const SESSION_DIR = getEnv('SESSION_DIR', '.wwebjs_auth');
   const HEADLESS = getEnv('HEADLESS', 'true').toLowerCase() !== 'false';
   const NO_SANDBOX = getEnv('NO_SANDBOX', 'false').toLowerCase() === 'true';
@@ -43,7 +52,11 @@ export function startWhatsAppAdapter() {
     console.log('[whatsapp] Scan this QR to authenticate:');
     try { qrcode.generate(qr, { small: true }); } catch { console.log('QR (raw):', qr); }
   });
-  client.on('ready', () => console.log('[whatsapp] READY'));
+  client.on('ready', () => {
+    console.log('[whatsapp] READY');
+    // TEMPORARY LOG: Print the service's own WhatsApp ID to the console.
+    console.log(`[whatsapp] Service is running as: ${client.info.wid._serialized}`);
+  });
   client.on('authenticated', () => console.log('[whatsapp] authenticated'));
   client.on('auth_failure', (msg) => console.error('[whatsapp] auth_failure:', msg));
   client.on('disconnected', (reason) => console.warn('[whatsapp] disconnected:', reason));
@@ -102,7 +115,7 @@ export function startWhatsAppAdapter() {
   // Outbound consumer: send only messages for this gateway npub/type
   consumeOut(async (out: GatewayOutData) => {
     if (out.gateway.type !== 'whatsapp') return;
-    if (GATEWAY_NPUB && out.gateway.npub !== GATEWAY_NPUB) return;
+    if (GATEWAY_NPUB && out.gateway.npub && out.gateway.npub.trim() !== GATEWAY_NPUB.trim()) return;
 
     try {
       console.log('[whatsapp] sending outbound message:', {
