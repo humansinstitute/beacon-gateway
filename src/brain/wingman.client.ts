@@ -5,6 +5,7 @@ type WingmanOptions = {
   dir?: string;
   apiUrl?: string; // default from env WINGMAN_API_URL
   token?: string;  // default from env WINGMAN_API_TOKEN
+  historySummary?: string | undefined;
 };
 
 function env(key: string): string | undefined {
@@ -39,6 +40,7 @@ export async function triggerWingmanForBeacon(
   const webhookUrl = `${base}/api/webhook/wingman_response`;
 
   const promptObj = {
+    messageHistory: opts.historySummary || '',
     message: text,
     next_action: {
       url: webhookUrl,

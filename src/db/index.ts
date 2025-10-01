@@ -29,7 +29,7 @@ function migrate(db: Database) {
     const row = db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`).get() as any;
     current = row?.v || null;
   } catch {}
-  const target = '3';
+  const target = '4';
   const needsReset = current !== target;
 
   if (needsReset) {
@@ -39,6 +39,7 @@ function migrate(db: Database) {
     DROP TABLE IF EXISTS messages;
     DROP TABLE IF EXISTS actions;
     DROP TABLE IF EXISTS local_npub_map;
+    DROP TABLE IF EXISTS conversation_state;
     PRAGMA foreign_keys=ON;
     `);
 
@@ -103,6 +104,14 @@ function migrate(db: Database) {
       created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
       UNIQUE (gateway_type, gateway_npub, gateway_user)
     );
+
+    -- Conversation consolidated state
+    CREATE TABLE IF NOT EXISTS conversation_state (
+      conversation_id TEXT PRIMARY KEY,
+      summary TEXT NOT NULL,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
     `);
 
     const upsert = db.query(`INSERT INTO _meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`);
@@ -163,6 +172,12 @@ function migrate(db: Database) {
         created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
         UNIQUE (gateway_type, gateway_npub, gateway_user)
       );
+      CREATE TABLE IF NOT EXISTS conversation_state (
+        conversation_id TEXT PRIMARY KEY,
+        summary TEXT NOT NULL,
+        message_count INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
     `);
   }
 
@@ -186,6 +201,31 @@ function migrate(db: Database) {
       `);
     }
   } catch {}
+}
+
+// -------------- Conversation state (summary) --------------
+export function getConversationState(conversationId: string): { summary: string; messageCount: number; updatedAt: number } | null {
+  const db = getDB();
+  const row = db.query(`SELECT summary, message_count, updated_at FROM conversation_state WHERE conversation_id = ?`).get(conversationId) as any;
+  if (!row) return null;
+  return { summary: row.summary as string, messageCount: Number(row.message_count), updatedAt: Number(row.updated_at) };
+}
+
+export function setConversationState(conversationId: string, summary: string, messageCount: number): void {
+  const db = getDB();
+  const now = nowSeconds();
+  const stmt = db.query(`
+    INSERT INTO conversation_state (conversation_id, summary, message_count, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(conversation_id) DO UPDATE SET summary = excluded.summary, message_count = excluded.message_count, updated_at = excluded.updated_at
+  `);
+  stmt.run(conversationId, summary, messageCount, now);
+}
+
+export function getConversationMessageCount(conversationId: string): number {
+  const db = getDB();
+  const row = db.query(`SELECT COUNT(1) as c FROM messages WHERE conversation_id = ?`).get(conversationId) as any;
+  return Number(row?.c || 0);
 }
 
 export function recordInboundMessage(m: import('../types').BeaconMessage): string {
