@@ -1,7 +1,7 @@
 import { getEnv, toBeaconMessage, GatewayInfo } from '../../types';
 import { enqueueBeacon, consumeOut } from '../../queues';
 import { resolveUserNpub } from '../npubMap';
-import { transitionDelivery } from '../../db';
+import { transitionDelivery, getDB, createOutboundMessage, logAction } from '../../db';
 
 type Client = {
   id: string;
@@ -71,9 +71,9 @@ export function startWebAdapter() {
         try {
           const body = await req.json();
           const text = (body.text || '').toString();
+          const from = (body.from || webId || '').toString();
           if (!text) return json({ error: 'text is required' }, 400);
-          const from = webId;
-          if (!from) return json({ error: 'WEBID is not set; configure WEBID in environment to enable sending.' }, 400);
+          if (!from) return json({ error: 'from is required (supply an account id)' }, 400);
 
           // Normalize to beacon + enqueue inbound for brain
           const beacon = toBeaconMessage({ source: 'web', text, from }, gateway, {
@@ -85,11 +85,78 @@ export function startWebAdapter() {
           if (mapped) beacon.meta.userNpub = mapped;
           enqueueBeacon(beacon);
 
+          // If the user is not mapped to a canonical npub, prompt them immediately
+          if (!mapped) {
+            const prompt = 'Please send me your Beacon ID Connect Code';
+            try {
+              const { messageId, deliveryId } = createOutboundMessage({
+                conversationId: beacon.meta?.conversationID || '',
+                replyToMessageId: undefined,
+                role: 'beacon',
+                userNpub: null,
+                content: { text: prompt, to: from },
+                metadata: { gateway: gateway },
+                channel: gateway.type,
+              });
+              broadcast('outbound', { to: from, text: prompt, messageId, deliveryId });
+              transitionDelivery(deliveryId, 'sent', { providerMessageId: 'web:' + messageId });
+              logAction(beacon.beaconID, 'web_prompt_connect_code', { to: from }, 'ok');
+            } catch {}
+          }
+
           // Also announce to connected clients immediately
           broadcast('inbound_ack', { from, text, beaconID: beacon.beaconID });
           return json({ ok: true, beaconID: beacon.beaconID });
         } catch (e: any) {
           return json({ error: 'invalid json', details: String(e?.message || e) }, 400);
+        }
+      }
+
+      // History for a given web account id
+      if (pathname === '/api/history' && req.method === 'GET') {
+        const account = (url.searchParams.get('account') || '').toString();
+        const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+        if (!account) return json({ error: 'account is required' }, 400);
+        try {
+          const db = getDB();
+          // Prefer canonical user mapping
+          const mapped = resolveUserNpub('web', npub, account);
+          let rows: any[];
+          if (mapped) {
+            rows = db
+              .query(
+                `SELECT * FROM messages
+                 WHERE user_npub = ?
+                   AND metadata_json LIKE '%"type":"web"%'
+                 ORDER BY created_at ASC
+                 LIMIT ?`
+              )
+              .all(mapped, limit) as any[];
+          } else {
+            // Fallback: LIKE filters to avoid JSON1
+            rows = db
+              .query(
+                `SELECT * FROM messages
+                 WHERE (
+                   content_json LIKE ? OR content_json LIKE ?
+                 )
+                   AND metadata_json LIKE '%"type":"web"%'
+                 ORDER BY created_at ASC
+                 LIMIT ?`
+              )
+              .all(`%"from":"${account}"%`, `%"to":"${account}"%`, limit) as any[];
+          }
+          const items = rows.map((r: any) => ({
+            id: r.id,
+            conversationId: r.conversation_id,
+            direction: r.direction,
+            role: r.role,
+            content: (() => { try { return JSON.parse(r.content_json); } catch { return {}; } })(),
+            createdAt: r.created_at,
+          }));
+          return json({ items });
+        } catch (e: any) {
+          return json({ error: 'failed to load history', details: String(e?.message || e) }, 500);
         }
       }
 
@@ -100,8 +167,8 @@ export function startWebAdapter() {
       open(ws) {
         const clientId = (ws.data as any)?.clientId || crypto.randomUUID();
         clients.set(clientId, { id: clientId, socket: ws });
-        // Send hello + defaults
-        ws.send(JSON.stringify({ event: 'hello', payload: { clientId, webId } }));
+        // Send hello with default account if configured
+        ws.send(JSON.stringify({ event: 'hello', payload: { clientId, defaultWebId: webId || null } }));
       },
       close(ws) {
         for (const [id, c] of clients) {
@@ -113,9 +180,11 @@ export function startWebAdapter() {
           const data = JSON.parse(typeof message === 'string' ? message : (new TextDecoder().decode(message as ArrayBuffer))) as any;
           if (data?.event === 'send') {
             const text = (data?.payload?.text || '').toString();
+            const from = (data?.payload?.from || webId || '').toString();
             if (!text) return;
+            if (!from) return;
             // Proxy to REST handler for consistency
-            fetch(`http://localhost:${port}/api/send`, { method: 'POST', body: JSON.stringify({ text }), headers: { 'Content-Type': 'application/json' } }).catch(() => {});
+            fetch(`http://localhost:${port}/api/send`, { method: 'POST', body: JSON.stringify({ text, from }), headers: { 'Content-Type': 'application/json' } }).catch(() => {});
           }
         } catch {}
       },
@@ -125,10 +194,8 @@ export function startWebAdapter() {
   // Outbound consumer: deliver messages targeted to web
   consumeOut((msg) => {
     if (msg.gateway.type !== 'web') return;
-    // If WEBID is configured, only deliver messages addressed to it
-    if (webId && msg.to && msg.to !== webId) return;
     broadcast('outbound', {
-      to: webId || null,
+      to: msg.to || null,
       text: msg.body,
       quotedMessageId: msg.quotedMessageId,
       deliveryId: msg.deliveryId,

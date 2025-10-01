@@ -35,8 +35,8 @@ Setup
 1) Install dependencies:
    bun install
 
-2) Start everything (gateway + brain + webhook server):
-   GATEWAY_NPUB=npub1yourkey bun run start:all
+2) Start everything (gateways + brain + HTTP):
+   GATEWAY_NPUB=npub1yourkey bun run src/start.ts
 
 3) Scan the QR shown in the terminal with the WhatsApp app.
 
@@ -84,56 +84,39 @@ Troubleshooting
 
 Queues
 - The modular runtime uses an in-process event bus under `src/queues/`.
-- Adapters (e.g., `src/gateway/whatsapp/adapter.ts`) enqueue normalized inbound events and consume outbound events to send.
-- Tagging: outbound messages include a `gateway` object, typically `{ npub: GATEWAY_NPUB, type: 'whatsapp' }`.
+- Adapters (WhatsApp, Web, etc.) enqueue normalized inbound events and consume outbound events to send.
+- Outbound messages include a `gateway` tag, e.g. `{ npub: GATEWAY_NPUB, type: 'whatsapp'|'web' }`.
 
-Message Flow
+Web Gateway UI
+- The web gateway runs alongside WhatsApp and serves a minimal chat UI.
+- Env:
+  - `WEB_PORT` (default: 3010)
+  - `WEBID` (optional) — if set, appears by default as an account in the UI
+- Start unified runtime:
+  GATEWAY_NPUB=<npub> bun run src/start.ts
+- Open the UI: `http://localhost:3010`
+- Features:
+  - Multi-account: add/remove IDs (persisted in localStorage)
+  - Send messages from the selected account
+  - History auto-loads per account; if mapped to a user npub, history is fetched via npub for the web gateway
+  - If an account is not mapped to a user npub, the UI receives an automatic prompt: "Please send me your Beacon ID Connect Code"
 
-  ┌───────────────────────────────┐
-  │         WhatsApp User         │
-  └───────────────┬───────────────┘
-                  │
-                  ▼
-  ┌───────────────────────────────┐
-  │      WhatsApp Web API         │
-  │       (web.whatsapp.com)      │
-  └───────────────┬───────────────┘
-                  │ (Puppeteer/Chromium)
-                  ▼
-  ┌───────────────────────────────┐
-  │     whatsapp-web.js Client    │
-  │        (LocalAuth/Events)     │
-  └───────────────┬───────────────┘
-                  │ emits
-                  ▼
-  ┌───────────────────────────────┐
-  │     client.on('message')      │
-  │   ├─ Create GatewayInData     │
-  │   └─ GATEWAY_IN.add()         │
-  └───────────────┬───────────────┘
-                  │ dequeues (rate-limited)
-                  ▼
-  ┌───────────────────────────────┐
-  │  processIncomingMessage(...)  │
-  │  ├─ enrich/log                │
-  │  └─ business logic            │
-  └───────────────┬───────────────┘
-                  │ optional reply/forward
-                  ▼
-  ┌───────────────────────────────┐
-  │  ├─ Create GatewayOutData     │
-  │  └─ GATEWAY_OUT.add()         │
-  └───────────────┬───────────────┘
-                  │ dequeues (rate-limited)
-                  ▼
-  ┌───────────────────────────────┐
-  │   sendMessage → client.send   │
-  └───────────────┬───────────────┘
-                  │
-                  ▼
-  ┌───────────────────────────────┐
-  │      WhatsApp Recipient       │
-  └───────────────────────────────┘
+Mapping WhatsApp and Web accounts to user npubs
+- Use the CLI to create local mappings so conversations thread across gateways under the same `user_npub`.
+- Run the wizard:
+  bun run src/cli/npub-map.ts
+- Create or update two mappings using the same `user_npub`:
+  1) Web account
+     - Gateway type: `web`
+     - Gateway npub: your `GATEWAY_NPUB`
+     - Gateway user: the web account ID you use in the UI (or `WEBID` if set)
+     - User npub: the canonical npub for this user
+  2) WhatsApp account
+     - Gateway type: `whatsapp`
+     - Gateway npub: your `GATEWAY_NPUB`
+     - Gateway user: WhatsApp user id (e.g., `123456789@c.us`)
+     - User npub: the same canonical npub as above
+- With both mappings set, you can start a conversation on the Web UI and continue on WhatsApp (and vice versa).
 
 Brain + Intent Routing
 - Worker: `src/brain/worker.ts` consumes Beacon envelopes and routes intents
@@ -146,39 +129,7 @@ Wingman Integration
 - Webhook: `/api/webhook/wingman_response` accepts { body, beaconID } and replies to the right chat
 - Context mapping: `src/brain/beacon_store.ts` remembers inbound routing (to, quotedMessageId, gateway)
 
-Testing Checklist
-- [ ] GATEWAY_NPUB environment variable is set
-- [ ] WhatsApp QR code authentication works
-- [ ] Incoming messages are added to GATEWAY_IN queue
-- [ ] Messages are processed with correct gateway identifier
-- [ ] GATEWAY_OUT queue sends messages successfully
-- [ ] Rate limiting works as expected
-- [ ] Error handling works for failed messages
-- [ ] Graceful shutdown works correctly
-- [ ] Queue stats are accurate
-- [ ] Multiple concurrent messages handled properly
-
-Success Criteria
-- All incoming WhatsApp messages flow through GATEWAY_IN
-- All outgoing messages flow through GATEWAY_OUT
-- Gateway identifier includes correct npub from env
-- Rate limiting prevents API abuse
-- Concurrent processing improves throughput
-- Error handling prevents queue blocking
-- Graceful shutdown preserves message integrity
-
-Related Documentation
-- p-queue: https://github.com/sindresorhus/p-queue
-- whatsapp-web.js Guide: https://wwebjs.dev/guide/
-- Message object: https://docs.wwebjs.dev/Message.html
-
-Labels
-`enhancement` `queue` `whatsapp` `gateway` `p-queue` `typescript`
-
-Assignees
-- [ ] Assign developer
-- [ ] Assign reviewer
-
-Timeline
-- Estimated Time: 4–6 hours
-- Priority: Medium
+Testing (manual)
+- WhatsApp login via QR flows and messages appear.
+- Web UI reachable at `http://localhost:3010`, supports add/remove accounts, send/receive, and history.
+- With mappings set, conversations continue across web and WhatsApp for the same user npub.
