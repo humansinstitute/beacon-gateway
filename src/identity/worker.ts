@@ -46,7 +46,7 @@ export function startIdentityWorker() {
           });
 
           // Step 3.4: Call the CVM client to send confirmation to the Brain.
-          sendPaymentConfirmation('paid', `Successful payment. Receipt: ${result.receipt}`, pendingPayment);
+          await sendPaymentConfirmation('paid', `Successful payment. Receipt: ${result.receipt}`, pendingPayment);
 
         } else {
           console.error(`[identity] Mock payment failed: ${result.error}`);
@@ -56,7 +56,7 @@ export function startIdentityWorker() {
             body: `Payment failed: ${result.error}`,
             gateway: { type: 'whatsapp', npub: getEnv('GATEWAY_NPUB', '').trim() }
           });
-          sendPaymentConfirmation('rejected', result.error || 'Payment failed for an unknown reason.', pendingPayment);
+          await sendPaymentConfirmation('rejected', result.error || 'Payment failed for an unknown reason.', pendingPayment);
         }
 
       } else {
