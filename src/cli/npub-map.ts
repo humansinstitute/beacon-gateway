@@ -13,7 +13,7 @@ async function prompt(question: string, def?: string): Promise<string> {
 }
 
 async function main() {
-  const defaultGateway = await prompt('Gateway type (whatsapp|signal|nostr|mesh)', 'whatsapp');
+  const defaultGateway = await prompt('Gateway type (whatsapp|signal|nostr|mesh|web)', 'whatsapp');
   const defaultNpub = getEnv('GATEWAY_NPUB', '');
   const gatewayNpub = await prompt('Gateway npub (this server npub)', defaultNpub || undefined);
   const gatewayUser = await prompt('Gateway user (e.g., 123456789@c.us)');
@@ -35,4 +35,3 @@ async function main() {
 }
 
 main().catch((e) => { console.error('Failed:', e); process.exit(1); });
-

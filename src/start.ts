@@ -3,6 +3,7 @@ import { startWhatsAppAdapter } from './gateway/whatsapp/adapter';
 import { startSignalAdapter } from './gateway/signal';
 import { startNostrAdapter } from './gateway/nostr';
 import { startMeshAdapter } from './gateway/mesh';
+import { startWebAdapter } from './gateway/web';
 import { startBrainWorker } from './brain/worker';
 import { getOutboundContext, forget } from './brain/beacon_store';
 import { logAction, createOutboundMessage } from './db';
@@ -18,6 +19,7 @@ function main() {
   startSignalAdapter();
   startNostrAdapter();
   startMeshAdapter();
+  startWebAdapter();
 
   // Start brain worker
   startBrainWorker();
