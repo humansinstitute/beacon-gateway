@@ -54,17 +54,51 @@ export function startBrainWorker() {
       } catch {}
       rememberInbound(msg, inboundMessageId);
 
-      // Route by intent (simple rules); default falls back to AI
-      const route = routeIntent(text);
+      // Route by intent (overrides + LLM); default falls back to AI
+      const route = await routeIntent(text, historyString);
       if (route.type === 'wingman') {
+        console.log('[intent] route chosen', { type: 'wingman' });
+        // Ensure downstream agents get cleaned text (strip slash command if any)
+        if (route.text) msg.source.text = route.text;
         const info = await triggerWingmanForBeacon(msg, { historySummary: historyString });
         logAction(msg.beaconID, 'wingman_trigger', info, 'ok');
         return; // wingman webhook will deliver the response
       }
 
-      // If router returned a preset default text (e.g., for "pay" heuristic), send it directly.
-      if ((route as any).type === 'default_with_text') {
-        // Wallet-related request detected; extract payment details via agent
+      // Settings: reply with a stubbed message
+      if (route.type === 'settings') {
+        console.log('[intent] route chosen', { type: 'settings' });
+        const answer = 'Sorry settings have not been implemented yet';
+        msg.response = {
+          to: msg.source.from || '',
+          text: answer,
+          quotedMessageId: msg.source.messageId,
+          gateway: { ...msg.source.gateway },
+        };
+        const { messageId, deliveryId } = createOutboundMessage({
+          conversationId: msg.meta?.conversationID || '',
+          replyToMessageId: inboundMessageId,
+          role: 'beacon',
+          userNpub: msg.meta?.userNpub || null,
+          content: {
+            text: answer,
+            to: msg.source.from || '',
+            quotedMessageId: msg.source.messageId,
+            beaconId: msg.beaconID,
+          },
+          metadata: { gateway: msg.source.gateway },
+          channel: msg.source.gateway.type,
+        });
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
+        console.log('[brain] enqueue outbound message (settings):', { ...out });
+        enqueueOut(out);
+        return;
+      }
+
+      if (route.type === 'wallet') {
+        console.log('[intent] route chosen', { type: 'wallet' });
+        // Wallet-related request: extract payment/balance details via agent
+        if (route.text) text = route.text;
         let agentText: string | undefined;
         let parsed: any;
         try {
@@ -110,7 +144,6 @@ export function startBrainWorker() {
 
               const satsFmt = new Intl.NumberFormat('en-US').format(amount);
               const answer = `I sent a request to your Beacon ID to pay ${lnAddress} ${satsFmt} Sats. Just waiting on confirmation.`;
-              logAction(msg.beaconID, 'preset_response', { answerPreview: answer.slice(0, 200) }, 'ok');
 
               msg.response = {
                 to: msg.source.from || '',
@@ -152,7 +185,6 @@ export function startBrainWorker() {
             const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) ||
               'npub1hs7h7pfsdeqxmhkk9vmutuqs0vztv503c4ve6wlq3nn2a58w6cfss9sus3';
             const res = await cvmGetBalance({ npub, refId: msg.beaconID });
-            // Expecting: { status: 'complete'|'failed', npub: string, balance: number }
             const status = (res as any)?.status || 'complete';
             const balance: number | undefined = (res as any)?.balance;
 
@@ -203,9 +235,9 @@ export function startBrainWorker() {
         const details = (() => {
           try { return parsed ? JSON.stringify(parsed) : (agentText || ''); } catch { return String(agentText || ''); }
         })();
-        console.log('[brain] paymentExtract result (non-pay_ln_address)', { beaconID: msg.beaconID, details });
+        console.log('[brain] paymentExtract result (wallet, fallback)', { beaconID: msg.beaconID, details });
 
-        const answer = `No worries. I extractec these details and processes the request\n\n${details}`;
+        const answer = `No worries. I extracted these details and processed the request\n\n${details}`;
         logAction(msg.beaconID, 'info_response', { answerPreview: answer.slice(0, 200) }, 'ok');
 
         msg.response = {
@@ -235,6 +267,11 @@ export function startBrainWorker() {
         return;
       }
 
+      // Conversation/default flow
+      if (route.type === 'default') {
+        console.log('[intent] route chosen', { type: 'conversation' });
+      }
+      if ((route as any).text) text = (route as any).text;
       logAction(msg.beaconID, 'ai_request', { agent: 'conversation', preview: text.slice(0, 200) });
       const answer = await quickResponseWithAgent(conversationAgent, text, historyString);
       logAction(msg.beaconID, 'ai_response', { answerPreview: answer.slice(0, 200) }, 'ok');
