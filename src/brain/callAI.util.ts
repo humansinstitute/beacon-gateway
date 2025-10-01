@@ -66,11 +66,7 @@ export async function quickResponse(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   // Minimal, structured logging for visibility
-  console.log('[callAI] request', {
-    model,
-    questionPreview: trimmed.slice(0, 120),
-    timeoutMs,
-  });
+  console.log(`[callAI] request model=${model} preview="${trimmed.slice(0, 80)}" timeoutMs=${timeoutMs}`);
 
   const attempt = async () => {
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -98,7 +94,7 @@ export async function quickResponse(
     const data = (await res.json()) as OpenRouterChatResponse;
     const choice = data.choices?.[0];
     const content = choice?.message?.content?.trim();
-    console.log('[callAI] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage });
+    console.log(`[callAI] response model=${data.model} finish=${choice?.finish_reason || 'unknown'}`);
     if (!content) throw new Error('OpenRouter: empty content in response');
     return content;
   };
@@ -143,14 +139,14 @@ export async function quickResponse(
       const data = (await res.json()) as OpenRouterChatResponse;
       const choice = data.choices?.[0];
       const content = choice?.message?.content?.trim();
-      console.log('[callAI] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage, retryMs: Date.now() - started });
+      console.log(`[callAI] response model=${data.model} finish=${choice?.finish_reason || 'unknown'} retryMs=${Date.now() - started}`);
       if (!content) throw new Error('OpenRouter: empty content in response');
       clearTimeout(timeout2);
       return content;
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error('[callAI] error', { message });
+    console.error(`[callAI] error: ${message}`);
     throw err;
   } finally {
     clearTimeout(timeout);
@@ -198,14 +194,15 @@ export async function quickResponseWithAgent(
   if (agent.chat.messageHistory) messages.push({ role: 'assistant', content: agent.chat.messageHistory });
   messages.push({ role: 'user', content: agent.chat.userPrompt });
 
-  console.log('[callAI] request', {
-    model: agent.model.model,
-    temperature: agent.model.temperature,
-    questionPreview: agent.chat.userPrompt.slice(0, 120),
-    timeoutMs,
-  });
+  console.log(`[callAI] request model=${agent.model.model} temp=${agent.model.temperature ?? ''} preview="${agent.chat.userPrompt.slice(0, 80)}" timeoutMs=${timeoutMs}`);
 
   const attempt = async (signal: AbortSignal) => {
+    const providerRouting = agent.model.inference_provider
+      ? { provider: { order: [agent.model.inference_provider] } }
+      : undefined;
+    if (agent.model.inference_provider) {
+      console.log(`[callAI] using provider order: ${agent.model.inference_provider}`);
+    }
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -217,6 +214,7 @@ export async function quickResponseWithAgent(
       body: JSON.stringify({
         model: agent.model.model,
         ...(typeof agent.model.temperature === 'number' ? { temperature: agent.model.temperature } : {}),
+        ...(providerRouting ? providerRouting : {}),
         messages,
       }),
       signal,
@@ -228,7 +226,7 @@ export async function quickResponseWithAgent(
     const data = (await res.json()) as OpenRouterChatResponse;
     const choice = data.choices?.[0];
     const content = choice?.message?.content?.trim();
-    console.log('[callAI] response', { model: data.model, finish_reason: choice?.finish_reason, usage: data.usage });
+    console.log(`[callAI] response model=${data.model} finish=${choice?.finish_reason || 'unknown'}`);
     if (!content) throw new Error('OpenRouter: empty content in response');
     return content;
   };
@@ -247,12 +245,12 @@ export async function quickResponseWithAgent(
       const timeout2 = setTimeout(() => controller2.abort(), timeoutMs);
       const result = await attempt(controller2.signal);
       clearTimeout(timeout2);
-      console.log('[callAI] retry succeeded', { durationMs: Date.now() - started });
+      console.log(`[callAI] retry succeeded durationMs=${Date.now() - started}`);
       return result;
     }
   } catch (err) {
     const messageErr = err instanceof Error ? err.message : String(err);
-    console.error('[callAI] error', { message: messageErr });
+    console.error(`[callAI] error: ${messageErr}`);
     throw err;
   } finally {
     clearTimeout(timeout);

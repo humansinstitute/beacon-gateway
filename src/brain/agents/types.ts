@@ -5,6 +5,7 @@ export type AgentProvider = 'openrouter';
 export interface AgentModelConfig {
   provider: AgentProvider; // currently only 'openrouter' supported in transport
   model: string; // e.g., 'openai/gpt-oss-120b'
+  inference_provider?: string; // Optional preferred inference provider (e.g., 'Groq')
   temperature?: number; // 0..1
 }
 
@@ -21,4 +22,3 @@ export interface AgentCall {
 }
 
 export type AgentFactory = (message: string, context?: string) => Promise<AgentCall> | AgentCall;
-
