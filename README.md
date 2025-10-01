@@ -144,3 +144,26 @@ Testing (manual)
 - WhatsApp login via QR flows and messages appear.
 - Web UI reachable at `http://localhost:3010`, supports add/remove accounts, send/receive, and history.
 - With mappings set, conversations continue across web and WhatsApp for the same user npub.
+
+Context VM Client (Brain)
+- File: `src/brain/cvm_client/cvm_client.ts`
+- Env:
+  - `BEACON_ID_CVM_PUB` — hex pubkey of the remote CVM server (Identity)
+  - `BRAIN_CVM_PRIVATE_KEY` — hex private key for this client
+  - `CVM_DEBUG` (optional: `true|false`) — if `true`, logs tool details and verbose responses
+- Usage example:
+
+```ts
+import { payLnAddress } from './brain/cvm_client/cvm_client';
+
+await payLnAddress({
+  npub: 'npubofuserwhoissendingpayment',
+  refId: 'beaconmessageID',
+  lnAddress: 'me@sats.com',
+  amount: 10000,
+  responsePubkey: 'caabbef036b063f6b29e8bc79f723aae8fb8eddc56fe198f150bae6a01741ee3',
+  responseTool: 'confirmPayment',
+});
+```
+
+Relays default to `wss://relay.contextvm.org` and `wss://cvm.otherstuff.ai`.

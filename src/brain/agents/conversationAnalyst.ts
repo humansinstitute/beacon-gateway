@@ -20,6 +20,8 @@ export const conversationAgent: AgentFactory = (message: string, context?: strin
     
     Your job is to evaluate the latest message you have recevied and see if you think it is a continuation of a previous converstaion and can continue under that conversationID or be given a new conversationID.
 
+    If the user is clearly referencing the last conversation e.g. tell me more about that, or other terms. Then please default to the last conversation. 
+
     You will receive the prompt as a JSON object including a message and a conversation history. Your job is to map the MESSAGE to indicate true false is this message likely a continuation of a conversation. If TRUE set 'isContinue=true' and map the correct converstaionId to the JSON output. If FALSE set 'isContinue=false' and map code '0000' converstaionId to the JSON output. 
 
     ====EXAMPLE PROMPT====
