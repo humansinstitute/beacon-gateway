@@ -29,7 +29,7 @@ function migrate(db: Database) {
     const row = db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`).get() as any;
     current = row?.v || null;
   } catch {}
-  const target = '4';
+  const target = '5';
   const needsReset = current !== target;
 
   if (needsReset) {
@@ -101,6 +101,8 @@ function migrate(db: Database) {
       gateway_npub TEXT NOT NULL,
       gateway_user TEXT NOT NULL,
       user_npub TEXT NOT NULL,
+      beacon_brain_npub TEXT NULL,
+      beacon_id_npub TEXT NULL,
       created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
       UNIQUE (gateway_type, gateway_npub, gateway_user)
     );
@@ -169,6 +171,8 @@ function migrate(db: Database) {
         gateway_npub TEXT NOT NULL,
         gateway_user TEXT NOT NULL,
         user_npub TEXT NOT NULL,
+        beacon_brain_npub TEXT NULL,
+        beacon_id_npub TEXT NULL,
         created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
         UNIQUE (gateway_type, gateway_npub, gateway_user)
       );
