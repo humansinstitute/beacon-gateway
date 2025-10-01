@@ -32,7 +32,8 @@ export async function routeIntent(message: string, context?: string): Promise<In
   // 1) Slash-command overrides
   const override = parseSlashOverride(text);
   if (override) {
-    console.log('[intent] override', { command: text.split(/\s+/)[0], route: override.type });
+    const cmd = text.split(/\s+/)[0];
+    console.log(`[intent] override: ${cmd} -> ${override.type}`);
     return override;
   }
 
@@ -50,10 +51,11 @@ export async function routeIntent(message: string, context?: string): Promise<In
     if (parsed && typeof parsed.intent === 'string') intent = String(parsed.intent);
     if (parsed && typeof parsed.confidence === 'number') confidence = Math.max(0, Math.min(100, Math.round(parsed.confidence)));
     if (parsed && typeof parsed.reasoning === 'string') reasoning = parsed.reasoning;
-    const preview = (reasoning || '').replace(/\s+/g, ' ').slice(0, 200);
-    console.log('[intent] extracted', { intent, confidence, reasoning: preview });
+    const preview = (reasoning || '').replace(/\s+/g, ' ').slice(0, 120);
+    console.log(`[intent] analysis complete: intent=${intent} confidence=${confidence} reason="${preview}"`);
   } catch (err) {
-    console.error('[intent] extract error', { message: (err as Error)?.message || String(err) });
+    const msg = (err as Error)?.message || String(err);
+    console.error(`[intent] analysis error: ${msg}`);
   }
 
   const threshold = Number(getEnv('INTENT_CONFIDENCE_THRESHOLD', '60')) || 60;

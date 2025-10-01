@@ -9,7 +9,7 @@ import { rememberInbound } from './beacon_store';
 import { triggerWingmanForBeacon } from './wingman.client';
 import { recordInboundMessage, logAction, createOutboundMessage } from '../db';
 import { getEnv } from '../types';
-import { payLnAddress as cvmPayLnAddress, getBalance as cvmGetBalance } from './cvm_client/cvm_client';
+import { payLnAddress as cvmPayLnAddress, getBalance as cvmGetBalance, payLnInvoice as cvmPayLnInvoice, getLNInvoice as cvmGetLNInvoice, getLNAddress as cvmGetLNAddress } from './cvm_client/cvm_client';
 import { checkConversation } from './checkConversation';
 import { maybeConsolidate } from './conversation/consolidate.util';
 
@@ -31,10 +31,12 @@ export function startBrainWorker() {
         return;
       }
 
+      console.log(`[brain] message received beaconID=${msg.beaconID}`);
       // Resolve conversation (use analyst when not a reply)
       const conv = await checkConversation({ replyToMessageId: undefined, userNpub: msg.meta?.userNpub || null, messageText: text });
       msg.meta = msg.meta || {};
       msg.meta.conversationID = conv.conversationId;
+      console.log(`[brain] conversation analysis complete conversationId=${msg.meta.conversationID}`);
 
       // Persist inbound message and remember routing context
       const inboundMessageId = recordInboundMessage(msg);
@@ -57,7 +59,7 @@ export function startBrainWorker() {
       // Route by intent (overrides + LLM); default falls back to AI
       const route = await routeIntent(text, historyString);
       if (route.type === 'wingman') {
-        console.log('[intent] route chosen', { type: 'wingman' });
+        console.log('[intent] route: wingman');
         // Ensure downstream agents get cleaned text (strip slash command if any)
         if (route.text) msg.source.text = route.text;
         const info = await triggerWingmanForBeacon(msg, { historySummary: historyString });
@@ -67,7 +69,7 @@ export function startBrainWorker() {
 
       // Settings: reply with a stubbed message
       if (route.type === 'settings') {
-        console.log('[intent] route chosen', { type: 'settings' });
+        console.log('[intent] route: settings');
         const answer = 'Sorry settings have not been implemented yet';
         msg.response = {
           to: msg.source.from || '',
@@ -90,13 +92,13 @@ export function startBrainWorker() {
           channel: msg.source.gateway.type,
         });
         const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
-        console.log('[brain] enqueue outbound message (settings):', { ...out });
+        console.log(`[brain] outbound queued (settings) deliveryId=${deliveryId} messageId=${messageId}`);
         enqueueOut(out);
         return;
       }
 
       if (route.type === 'wallet') {
-        console.log('[intent] route chosen', { type: 'wallet' });
+        console.log('[intent] route: wallet');
         // Wallet-related request: extract payment/balance details via agent
         if (route.text) text = route.text;
         let agentText: string | undefined;
@@ -107,7 +109,179 @@ export function startBrainWorker() {
           parsed = JSON.parse(agentText);
           logAction(msg.beaconID, 'agent_response', { agent: 'paymentExtract', preview: agentText.slice(0, 200) }, 'ok');
         } catch (err) {
-          console.error('[brain] paymentExtract parse error', { beaconID: msg.beaconID, err, agentText });
+          console.error(`[brain] paymentExtract parse error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
+        }
+
+        // Handle receive_invoice by generating an LN invoice via CVM
+        if (parsed?.type === 'receive_invoice') {
+          try {
+            const amountRaw: unknown = parsed?.parameters?.amount;
+            const amount = (typeof amountRaw === 'number' && Number.isFinite(amountRaw) && amountRaw > 0) ? Math.round(amountRaw) : undefined;
+            const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+            if (!npub || !npub.startsWith('npub')) {
+              const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+              msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+              const { messageId, deliveryId } = createOutboundMessage({
+                conversationId: msg.meta?.conversationID || '',
+                replyToMessageId: inboundMessageId,
+                role: 'beacon', userNpub: msg.meta?.userNpub || null,
+                content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+                metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+              });
+              const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+            }
+            if (!amount) {
+              const answer = 'Please specify an amount in sats to generate an invoice.';
+              msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+              const { messageId, deliveryId } = createOutboundMessage({
+                conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+                content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+                metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+              });
+              const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+            }
+
+            const res = await cvmGetLNInvoice({ npub, refId: msg.beaconID, amount });
+            const status = (res as any)?.status || 'error';
+            const lnInvoice: string | undefined = (res as any)?.ln_Invoice || (res as any)?.lnInvoice;
+            const desc: string = (res as any)?.description || '';
+
+            let answer: string;
+            if (status === 'complete' && lnInvoice) {
+              answer = `Here’s your Lightning invoice for ${amount} sats:\n${lnInvoice}`;
+            } else {
+              answer = desc ? `Could not create invoice: ${desc}` : 'Could not create invoice right now.';
+            }
+
+            msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+            const { messageId, deliveryId } = createOutboundMessage({
+              conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+              content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+              metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+            });
+            const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          } catch (err) {
+            console.error(`[brain] cvm getLNInvoice error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
+            logAction(msg.beaconID, 'cvm_getLNInvoice', { error: String((err as Error)?.message || err) }, 'failed');
+          }
+        }
+
+        // Handle get_ln_address via CVM
+        if (parsed?.type === 'get_ln_address') {
+          try {
+            const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+            if (!npub || !npub.startsWith('npub')) {
+              const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+              msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+              const { messageId, deliveryId } = createOutboundMessage({
+                conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+                content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+                metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+              });
+              const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+            }
+
+            const res = await cvmGetLNAddress({ npub, refId: msg.beaconID });
+            const status = (res as any)?.status || 'error';
+            const lnAddress: string | undefined = (res as any)?.ln_address || (res as any)?.lnAddress;
+            const desc: string = (res as any)?.description || '';
+
+            let answer: string;
+            if (status === 'complete' && lnAddress) {
+              answer = `Your Lightning address is: ${lnAddress}`;
+            } else {
+              answer = desc ? `Could not fetch LN address: ${desc}` : 'Could not fetch LN address right now.';
+            }
+
+            msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+            const { messageId, deliveryId } = createOutboundMessage({
+              conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+              content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+              metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+            });
+            const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          } catch (err) {
+            console.error(`[brain] cvm getLNAddress error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
+            logAction(msg.beaconID, 'cvm_getLNAddress', { error: String((err as Error)?.message || err) }, 'failed');
+          }
+        }
+
+        // Handle pay_invoice via CVM tool (Lightning invoice)
+        if (parsed?.type === 'pay_invoice') {
+          try {
+            const invoice: string | undefined = parsed?.parameters?.invoice;
+            if (invoice && typeof invoice === 'string') {
+              const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+              if (!npub || !npub.startsWith('npub')) {
+                const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+                msg.response = {
+                  to: msg.source.from || '',
+                  text: answer,
+                  quotedMessageId: msg.source.messageId,
+                  gateway: { ...msg.source.gateway },
+                };
+                const { messageId, deliveryId } = createOutboundMessage({
+                  conversationId: msg.meta?.conversationID || '',
+                  replyToMessageId: inboundMessageId,
+                  role: 'beacon',
+                  userNpub: msg.meta?.userNpub || null,
+                  content: {
+                    text: answer,
+                    to: msg.source.from || '',
+                    quotedMessageId: msg.source.messageId,
+                    beaconId: msg.beaconID,
+                  },
+                  metadata: { gateway: msg.source.gateway },
+                  channel: msg.source.gateway.type,
+                });
+                const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
+                enqueueOut(out);
+                return;
+              }
+
+              const responsePubkey = '02dbeea53a134f63f9ae917d69738b8b3f17046c54c22bda3edb543b3789c4fa';
+
+              await cvmPayLnInvoice({
+                npub,
+                refId: msg.beaconID,
+                lnInvoice: invoice,
+                responsePubkey,
+                responseTool: 'confirmPayment',
+              });
+              logAction(msg.beaconID, 'cvm_payLnInvoice', { lnInvoice: invoice.slice(0, 24) + '…', responsePubkey: responsePubkey.slice(0,8) + '…' }, 'sent');
+
+              const answer = `We’ve sent the request for approval to pay that Lightning invoice.`;
+
+              msg.response = {
+                to: msg.source.from || '',
+                text: answer,
+                quotedMessageId: msg.source.messageId,
+                gateway: { ...msg.source.gateway },
+              };
+
+              const { messageId, deliveryId } = createOutboundMessage({
+                conversationId: msg.meta?.conversationID || '',
+                replyToMessageId: inboundMessageId,
+                role: 'beacon',
+                userNpub: msg.meta?.userNpub || null,
+                content: {
+                  text: answer,
+                  to: msg.source.from || '',
+                  quotedMessageId: msg.source.messageId,
+                  beaconId: msg.beaconID,
+                },
+                metadata: { gateway: msg.source.gateway },
+                channel: msg.source.gateway.type,
+              });
+              const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
+              console.log(`[brain] outbound queued deliveryId=${deliveryId} messageId=${messageId}`);
+              enqueueOut(out);
+              return;
+            }
+          } catch (err) {
+            console.error(`[brain] cvm payLnInvoice error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
+            logAction(msg.beaconID, 'cvm_payLnInvoice', { error: String((err as Error)?.message || err) }, 'failed');
+          }
         }
 
         // Handle pay_ln_address with extracted data and currency conversion
@@ -127,13 +301,40 @@ export function startBrainWorker() {
             }
 
             if (recipient && amountSats && amountSats > 0) {
+              const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+              if (!npub || !npub.startsWith('npub')) {
+                const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+                msg.response = {
+                  to: msg.source.from || '',
+                  text: answer,
+                  quotedMessageId: msg.source.messageId,
+                  gateway: { ...msg.source.gateway },
+                };
+                const { messageId, deliveryId } = createOutboundMessage({
+                  conversationId: msg.meta?.conversationID || '',
+                  replyToMessageId: inboundMessageId,
+                  role: 'beacon',
+                  userNpub: msg.meta?.userNpub || null,
+                  content: {
+                    text: answer,
+                    to: msg.source.from || '',
+                    quotedMessageId: msg.source.messageId,
+                    beaconId: msg.beaconID,
+                  },
+                  metadata: { gateway: msg.source.gateway },
+                  channel: msg.source.gateway.type,
+                });
+                const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
+                enqueueOut(out);
+                return;
+              }
               const lnAddress = recipient;
               const amount = amountSats;
               const responsePubkey = getEnv('BEACON_BRAIN_HEX_PUB', '').trim() ||
                 'caabbef036b063f6b29e8bc79f723aae8fb8eddc56fe198f150bae6a01741ee3';
 
               await cvmPayLnAddress({
-                npub: 'npub1hs7h7pfsdeqxmhkk9vmutuqs0vztv503c4ve6wlq3nn2a58w6cfss9sus3',
+                npub,
                 refId: msg.beaconID,
                 lnAddress,
                 amount,
@@ -167,14 +368,14 @@ export function startBrainWorker() {
                 channel: msg.source.gateway.type,
               });
               const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
-              console.log('[brain] enqueue outbound message:', { ...out });
+              console.log(`[brain] outbound queued deliveryId=${deliveryId} messageId=${messageId}`);
               enqueueOut(out);
               return;
             }
 
             // Missing recipient or amount; fall through to info response with extracted details
           } catch (err) {
-            console.error('[brain] cvm payLnAddress (extracted) error', { beaconID: msg.beaconID, err });
+            console.error(`[brain] cvm payLnAddress (extracted) error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
             logAction(msg.beaconID, 'cvm_payLnAddress', { error: String((err as Error)?.message || err) }, 'failed');
           }
         }
@@ -182,8 +383,33 @@ export function startBrainWorker() {
         // Handle balance queries using CVM getBalance tool
         if (parsed?.type === 'balance') {
           try {
-            const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) ||
-              'npub1hs7h7pfsdeqxmhkk9vmutuqs0vztv503c4ve6wlq3nn2a58w6cfss9sus3';
+            const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+            if (!npub || !npub.startsWith('npub')) {
+              const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+              msg.response = {
+                to: msg.source.from || '',
+                text: answer,
+                quotedMessageId: msg.source.messageId,
+                gateway: { ...msg.source.gateway },
+              };
+              const { messageId, deliveryId } = createOutboundMessage({
+                conversationId: msg.meta?.conversationID || '',
+                replyToMessageId: inboundMessageId,
+                role: 'beacon',
+                userNpub: msg.meta?.userNpub || null,
+                content: {
+                  text: answer,
+                  to: msg.source.from || '',
+                  quotedMessageId: msg.source.messageId,
+                  beaconId: msg.beaconID,
+                },
+                metadata: { gateway: msg.source.gateway },
+                channel: msg.source.gateway.type,
+              });
+              const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
+              enqueueOut(out);
+              return;
+            }
             const res = await cvmGetBalance({ npub, refId: msg.beaconID });
             const status = (res as any)?.status || 'complete';
             const balance: number | undefined = (res as any)?.balance;
@@ -219,14 +445,14 @@ export function startBrainWorker() {
                 channel: msg.source.gateway.type,
               });
               const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
-              console.log('[brain] enqueue outbound message:', { ...out });
+              console.log(`[brain] outbound queued deliveryId=${deliveryId} messageId=${messageId}`);
               enqueueOut(out);
               return;
             } else {
-              console.error('[brain] getBalance unexpected response', { res });
+              console.error('[brain] getBalance unexpected response');
             }
           } catch (err) {
-            console.error('[brain] cvm getBalance error', { beaconID: msg.beaconID, err });
+            console.error(`[brain] cvm getBalance error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
             logAction(msg.beaconID, 'cvm_getBalance', { error: String((err as Error)?.message || err) }, 'failed');
           }
         }
@@ -235,7 +461,7 @@ export function startBrainWorker() {
         const details = (() => {
           try { return parsed ? JSON.stringify(parsed) : (agentText || ''); } catch { return String(agentText || ''); }
         })();
-        console.log('[brain] paymentExtract result (wallet, fallback)', { beaconID: msg.beaconID, details });
+        console.log('[brain] wallet flow fallback response sent');
 
         const answer = `No worries. I extracted these details and processed the request\n\n${details}`;
         logAction(msg.beaconID, 'info_response', { answerPreview: answer.slice(0, 200) }, 'ok');
@@ -262,14 +488,14 @@ export function startBrainWorker() {
           channel: msg.source.gateway.type,
         });
         const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
-        console.log('[brain] enqueue outbound message:', { ...out });
+        console.log(`[brain] outbound queued deliveryId=${deliveryId} messageId=${messageId}`);
         enqueueOut(out);
         return;
       }
 
       // Conversation/default flow
       if (route.type === 'default') {
-        console.log('[intent] route chosen', { type: 'conversation' });
+        console.log('[intent] route: conversation');
       }
       if ((route as any).text) text = (route as any).text;
       logAction(msg.beaconID, 'ai_request', { agent: 'conversation', preview: text.slice(0, 200) });
@@ -302,12 +528,12 @@ export function startBrainWorker() {
       });
 
       const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
-      console.log('[brain] enqueue outbound message:', { ...out });
+      console.log(`[brain] outbound queued deliveryId=${deliveryId} messageId=${messageId}`);
       enqueueOut(out);
     } catch (err) {
-      console.error('[brain] error handling beacon message:', { beaconID: msg.beaconID, err });
+      console.error(`[brain] error handling message beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
       logAction(msg.beaconID, 'error', { message: String((err as Error)?.message || err) }, 'failed');
     }
   });
-  console.log('[brain] worker started (intent_router + wingman)');
+  console.log('[brain] worker started');
 }

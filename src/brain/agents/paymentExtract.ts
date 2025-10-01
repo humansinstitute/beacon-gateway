@@ -45,6 +45,7 @@ PARAMETER EXTRACTION RULES:
 - Amounts: Look for numbers followed by "sats", "satoshis", "bitcoin", "btc" or "$", "dollars", "USD" standalone numbers in Bitcoin context
 - Recipients: Look for names, usernames, name@domain.tld for ln address, or identifiers after send/transfer keywords
 - Be flexible with natural language (e.g., "five thousand sats" = 5000)
+- Never change a lighnting address / email address when you extract it
 
 CONFIDENCE SCORING:
 - 90-100: Very clear operation with explicit keywords
@@ -90,7 +91,7 @@ Output: {"type": "pay_ln_address", "parameters": {"amount": 1000, "recipient": "
     callID: uuidLite(),
     model: {
       provider: 'openrouter',
-      model: 'moonshotai/kimi-k2-0905',
+      model: 'openai/gpt-oss-120b',
       inference_provider: 'Groq',
       temperature: 0.6,
     },
