@@ -4,7 +4,7 @@ import { consumeOut, enqueueBeacon } from '../../queues';
 import type { GatewayOutData, BeaconMessage } from '../../types';
 import { getEnv, toBeaconMessage } from '../../types';
 import { transitionDelivery } from '../../db';
-import { resolveUserNpub } from '../npubMap';
+import { ensureMappedOrPrompt } from '../unknownUser';
 
 function resolveContactName(contact: any): string | undefined {
   const candidate = (
@@ -50,6 +50,8 @@ export function startWhatsAppAdapter() {
 
   client.on('message', async (msg) => {
     try {
+      // Ignore messages sent by this account to avoid echo loops
+      if ((msg as any)?.fromMe) return;
       let contactName: string | undefined;
       try { const contact = await msg.getContact(); contactName = resolveContactName(contact); } catch {}
       let chatName: string | undefined;
@@ -88,8 +90,9 @@ export function startWhatsAppAdapter() {
         }
       );
       // Map gateway user to a canonical user npub via local DB mapping (if present)
-      const mapped = resolveUserNpub('whatsapp', GATEWAY_NPUB, msg.from);
-      if (mapped) beacon.meta.userNpub = mapped;
+      const mapped = await ensureMappedOrPrompt('whatsapp', GATEWAY_NPUB, msg.from, (text) => client.sendMessage(msg.from, text));
+      if (!mapped) return; // do not enqueue until user is mapped
+      beacon.meta.userNpub = mapped;
       enqueueBeacon(beacon);
     } catch (e) {
       console.error('[whatsapp] error handling message:', e);

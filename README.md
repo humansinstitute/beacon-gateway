@@ -118,6 +118,17 @@ Mapping WhatsApp and Web accounts to user npubs
      - User npub: the same canonical npub as above
 - With both mappings set, you can start a conversation on the Web UI and continue on WhatsApp (and vice versa).
 
+Unknown users across gateways
+- For any inbound message where the gateway user is not mapped in `local_npub_map`, the gateway does not process the message and sends:
+  - "Please setup your Beacon ID first for access to beacon!"
+- Implemented for `whatsapp` and `web` adapters; other adapters should use `ensureMappedOrPrompt` from `src/gateway/unknownUser.ts` when adding inbound handling.
+
+Per-user links to remote services (optional)
+- The mapping wizard now supports two optional fields to link a user to remote services:
+  - Beacon Brain npub (authorizes interactions with the Brain service)
+  - Beacon ID npub (authorizes cryptographic signing/spend via ID server)
+- Leave these blank to skip; you can update later by re-running the wizard.
+
 Brain + Intent Routing
 - Worker: `src/brain/worker.ts` consumes Beacon envelopes and routes intents
 - Router: `src/brain/intent_router.ts`

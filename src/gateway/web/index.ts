@@ -1,6 +1,7 @@
 import { getEnv, toBeaconMessage, GatewayInfo } from '../../types';
 import { enqueueBeacon, consumeOut } from '../../queues';
 import { resolveUserNpub } from '../npubMap';
+import { ensureMappedOrPrompt, UNKNOWN_USER_PROMPT } from '../unknownUser';
 import { transitionDelivery, getDB, createOutboundMessage, logAction } from '../../db';
 
 type Client = {
@@ -75,38 +76,40 @@ export function startWebAdapter() {
           if (!text) return json({ error: 'text is required' }, 400);
           if (!from) return json({ error: 'from is required (supply an account id)' }, 400);
 
-          // Normalize to beacon + enqueue inbound for brain
+          // Normalize to beacon
           const beacon = toBeaconMessage({ source: 'web', text, from }, gateway, {
             from,
             text,
           });
-          // Map to canonical user npub if present
-          const mapped = resolveUserNpub('web', npub, from);
-          if (mapped) beacon.meta.userNpub = mapped;
-          enqueueBeacon(beacon);
-
-          // If the user is not mapped to a canonical npub, prompt them immediately
-          if (!mapped) {
-            const prompt = 'Please send me your Beacon ID Connect Code';
+          // Map to canonical user npub if present. If missing, send prompt via web channel and stop.
+          const mapped = await ensureMappedOrPrompt('web', npub, from, (promptText) => {
             try {
               const { messageId, deliveryId } = createOutboundMessage({
                 conversationId: beacon.meta?.conversationID || '',
                 replyToMessageId: undefined,
                 role: 'beacon',
                 userNpub: null,
-                content: { text: prompt, to: from },
+                content: { text: promptText || UNKNOWN_USER_PROMPT, to: from },
                 metadata: { gateway: gateway },
                 channel: gateway.type,
               });
-              broadcast('outbound', { to: from, text: prompt, messageId, deliveryId });
+              broadcast('outbound', { to: from, text: promptText || UNKNOWN_USER_PROMPT, messageId, deliveryId });
               transitionDelivery(deliveryId, 'sent', { providerMessageId: 'web:' + messageId });
               logAction(beacon.beaconID, 'web_prompt_connect_code', { to: from }, 'ok');
             } catch {}
+          });
+          if (!mapped) {
+            broadcast('inbound_ack', { from, text, beaconID: beacon.beaconID });
+            return json({ ok: true, beaconID: beacon.beaconID, mapped: false });
           }
+
+          // Known user: set mapping and enqueue for processing
+          beacon.meta.userNpub = mapped;
+          enqueueBeacon(beacon);
 
           // Also announce to connected clients immediately
           broadcast('inbound_ack', { from, text, beaconID: beacon.beaconID });
-          return json({ ok: true, beaconID: beacon.beaconID });
+          return json({ ok: true, beaconID: beacon.beaconID, mapped: true });
         } catch (e: any) {
           return json({ error: 'invalid json', details: String(e?.message || e) }, 400);
         }
