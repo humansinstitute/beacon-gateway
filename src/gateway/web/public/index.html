@@ -10,7 +10,11 @@
     <div class="app">
       <header>
         <h1>Beacon Web</h1>
-        <div class="user">User: <span id="userId"></span></div>
+        <div class="accounts">
+          <select id="accountSelect"></select>
+          <button id="addAccount">+ Add</button>
+          <button id="removeAccount" class="danger">Remove</button>
+        </div>
       </header>
       <main id="messages"></main>
       <footer>
@@ -21,4 +25,3 @@
     <script src="/client.js"></script>
   </body>
   </html>
-
