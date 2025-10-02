@@ -52,8 +52,33 @@ export function startBrainWorker() {
       }
 
       console.log(`[brain] message received beaconID=${msg.beaconID}`);
+      // Ensure userNpub is populated from local map if missing
+      if (!msg.meta) msg.meta = {} as any;
+      if (!msg.meta.userNpub) {
+        try {
+          const { resolveUserNpub, resolveUserNpubLoose } = await import('../gateway/npubMap');
+          const gw = msg.source.gateway;
+          const gatewayUser = msg.source.from || '';
+          if (gw?.type && gw?.npub && gatewayUser) {
+            const mapped = resolveUserNpub(gw.type as any, gw.npub, gatewayUser);
+            if (mapped) {
+              msg.meta.userNpub = mapped;
+              console.log(`[brain] userNpub resolved (strict) for ${gatewayUser}`);
+            } else {
+              const loose = resolveUserNpubLoose(gatewayUser);
+              if (loose) {
+                msg.meta.userNpub = loose;
+                console.log(`[brain] userNpub resolved (loose) for ${gatewayUser}`);
+              } else {
+                console.log(`[brain] userNpub not found for ${gatewayUser}`);
+              }
+            }
+          }
+        } catch {}
+      }
       // Resolve conversation (use analyst when not a reply)
-      const conv = await checkConversation({ replyToMessageId: undefined, userNpub: msg.meta?.userNpub || null, messageText: text });
+      const isSlash = /^\s*\//.test(text);
+      const conv = await checkConversation({ replyToMessageId: undefined, userNpub: msg.meta?.userNpub || null, messageText: isSlash ? '' : text });
       msg.meta = msg.meta || {};
       msg.meta.conversationID = conv.conversationId;
       console.log(`[brain] conversation analysis complete conversationId=${msg.meta.conversationID}`);
@@ -117,10 +142,111 @@ export function startBrainWorker() {
         return;
       }
 
-      if (route.type === 'wallet') {
-        console.log('[intent] route: wallet');
-        // Wallet-related request: extract payment/balance details via agent
-        if (route.text) text = route.text;
+  if (route.type === 'wallet') {
+    console.log('[intent] route: wallet');
+    // Wallet-related request: extract payment/balance details via agent
+    if (route.text) text = route.text;
+
+    // Fast-path: handle /nick <nickname> <amount> without AI
+    if (text.startsWith('/nick')) {
+      try {
+        const parts = text.split(/\s+/).filter(Boolean);
+        const nickname = parts[1]?.toLowerCase();
+        const amountStr = parts.slice(2).join(' ').trim();
+        if (!nickname || !amountStr) {
+          const answer = 'Usage: /nick <nickname> <amount>. Examples: \'/nick paul $5\', \'/nick alice 5000 sats\'';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+
+        // Parse amount and currency
+        const lower = amountStr.toLowerCase();
+        const satsPerDollar = Number(getEnv('SATS_PER_DOLLAR', '1000')) || 1000;
+        let amountSats: number | undefined;
+        if (/[\$]|\busd\b/.test(lower)) {
+          const m = lower.match(/\$?\s*([0-9]+(?:\.[0-9]+)?)/);
+          const usd = m ? parseFloat(m[1]) : NaN;
+          if (Number.isFinite(usd) && usd > 0) amountSats = Math.round(usd * satsPerDollar);
+        } else if (/sats?\b/.test(lower)) {
+          const m = lower.match(/([0-9][0-9_,.]*)/);
+          const n = m ? parseInt(m[1].replace(/[,_.]/g, ''), 10) : NaN;
+          if (Number.isFinite(n) && n > 0) amountSats = Math.round(n);
+        } else {
+          // Default to sats if no unit provided
+          const m = lower.match(/([0-9][0-9_,.]*)/);
+          const n = m ? parseInt(m[1].replace(/[,_.]/g, ''), 10) : NaN;
+          if (Number.isFinite(n) && n > 0) amountSats = Math.round(n);
+        }
+
+        const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+        if (!npub || !npub.startsWith('npub')) {
+          const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+        if (!amountSats || amountSats <= 0) {
+          const answer = 'Could not parse amount. Use $ for dollars or provide sats.';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+
+        // Lookup nickname
+        const { getNickname } = await import('../db/nicknames');
+        const rec = getNickname(npub, nickname);
+        if (!rec) {
+          const answer = `No nickname found for '${nickname}'. Add one via CLI: bun run src/cli/nicknames.ts add ${npub} ${nickname} name@domain.tld`;
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+
+        const lnAddress = rec.lnAddress;
+        const amount = amountSats;
+        const responsePubkey = getEnv('BEACON_BRAIN_HEX_PUB', '').trim() ||
+          'caabbef036b063f6b29e8bc79f723aae8fb8eddc56fe198f150bae6a01741ee3';
+
+        await cvmPayLnAddress({
+          npub,
+          refId: msg.beaconID,
+          lnAddress,
+          amount,
+          responsePubkey,
+          responseTool: 'confirmPayment',
+        });
+        logAction(msg.beaconID, 'cvm_payLnAddress', { lnAddress, amount, nickname, responsePubkey: responsePubkey.slice(0,8) + '…' }, 'sent');
+
+        const satsFmt = new Intl.NumberFormat('en-US').format(amount);
+        const answer = `I sent a request to pay ${nickname} (${lnAddress}) ${satsFmt} Sats. Awaiting confirmation.`;
+        msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+        const { messageId, deliveryId } = createOutboundMessage({
+          conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+          content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+          metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+        });
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+      } catch (err) {
+        console.error(`[brain] /nick flow error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
+      }
+    }
         let agentText: string | undefined;
         let parsed: any;
         try {

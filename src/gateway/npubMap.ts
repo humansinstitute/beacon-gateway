@@ -53,3 +53,22 @@ export function resolveUserLinks(
     return undefined;
   }
 }
+
+/**
+ * Fallback resolver: try to find a mapping by gateway_user only,
+ * ignoring gateway npub/type. Useful when environments change npub
+ * or when legacy mappings exist.
+ */
+export function resolveUserNpubLoose(gatewayUser: string): string | undefined {
+  try {
+    const db = getDB();
+    const row = db
+      .query(
+        `SELECT user_npub FROM local_npub_map WHERE gateway_user = ? ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(gatewayUser) as any;
+    return row?.user_npub || undefined;
+  } catch {
+    return undefined;
+  }
+}

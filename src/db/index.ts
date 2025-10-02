@@ -29,7 +29,7 @@ function migrate(db: Database) {
     const row = db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`).get() as any;
     current = row?.v || null;
   } catch {}
-  const target = '8';
+  const target = '9';
   const needsReset = current !== target;
 
   if (needsReset) {
@@ -40,6 +40,7 @@ function migrate(db: Database) {
     DROP TABLE IF EXISTS actions;
     DROP TABLE IF EXISTS local_npub_map;
     DROP TABLE IF EXISTS conversation_state;
+    DROP TABLE IF EXISTS nicknames;
     DROP TABLE IF EXISTS user_wallets;
     PRAGMA foreign_keys=ON;
     `);
@@ -123,6 +124,16 @@ function migrate(db: Database) {
       ln_address TEXT NULL,
       created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
     );
+
+    -- User-specific nickname to LN address mapping
+    CREATE TABLE IF NOT EXISTS nicknames (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_npub TEXT NOT NULL,
+      nickname TEXT NOT NULL,
+      ln_address TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      UNIQUE (user_npub, nickname)
+    );
     `);
 
     const upsert = db.query(`INSERT INTO _meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`);
@@ -190,6 +201,14 @@ function migrate(db: Database) {
         summary TEXT NOT NULL,
         message_count INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS nicknames (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_npub TEXT NOT NULL,
+        nickname TEXT NOT NULL,
+        ln_address TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        UNIQUE (user_npub, nickname)
       );
     `);
   }

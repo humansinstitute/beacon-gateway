@@ -22,7 +22,8 @@ function parseSlashOverride(message: string): IntentRoute | null {
   if (cmd === '/think') return { type: 'wingman', text: rest };
   if (cmd === '/wallet') return { type: 'wallet', text: rest };
   if (cmd === '/settings') return { type: 'settings' };
-  return null;
+  // Default: any other slash commands route to wallet (no AI intent)
+  return { type: 'wallet', text: original };
 }
 
 export async function routeIntent(message: string, context?: string): Promise<IntentRoute> {
