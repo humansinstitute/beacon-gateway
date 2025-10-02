@@ -94,6 +94,10 @@ public/media/
 .idea/
 *.iml
 
+# Local LNBits installation
+lnbits/
+setup_lnbits.sh
+
 # Temp files
 tmp/
 temp/

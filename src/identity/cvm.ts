@@ -10,10 +10,10 @@ import { PendingPayment } from "./pending_store";
 import { enqueueIdentityOut } from "./queues";
 import { storePendingConfirmation, retrieveAndClearConfirmation } from "./pending_store";
 import { getDB } from "../db";
-import { makePayment } from "./wallet_manager";
+import { makePayment, getBalance, createInvoice, getLNAddress } from "./wallet_manager";
 
 // --- Configuration ---
-const RELAYS = ["wss://relay.contextvm.org", "wss://cvm.otherstuff.ai"];
+const RELAYS = ["wss://cvm.otherstuff.ai"];
 
 // --- Idempotency Cache ---
 const processedRefIds = new Set<string>();
@@ -208,6 +208,153 @@ export async function startCvmServer() {
       }
 
       return { status: "pending", details: `Awaiting user confirmation via ${targetGateway}.` };
+    }
+  );
+
+  mcpServer.registerTool(
+    "payLnInvoice",
+    {
+      title: "Pay Lightning Invoice",
+      description: "Initiates a payment for a BOLT11 Lightning invoice",
+      inputSchema: {
+        npub: z.string(),
+        refId: z.string(),
+        lnInvoice: z.string(),
+        responsePubkey: z.string(),
+        responseTool: z.string(),
+      },
+    },
+    async (args) => {
+      console.log(`[CVM] Received 'payLnInvoice' request with refId: ${args.refId}`);
+      if (isRefIdProcessed(args.refId)) {
+        return { status: "error", details: "Duplicate request." };
+      }
+
+      const targetUser = findGatewayUserByNpubForType(args.npub, 'web') || findGatewayUserByNpub(args.npub);
+      const targetGateway: 'web' | 'whatsapp' | null = findGatewayUserByNpubForType(args.npub, 'web') ? 'web' : (targetUser ? 'whatsapp' : null);
+
+      if (!targetUser || !targetGateway) {
+        console.error(`[CVM] No gateway mapping found for user npub ${args.npub}. Cannot prompt for approval.`);
+        return { status: "error", details: `User with npub ${args.npub} not found or not mapped to web/whatsapp.` };
+      }
+
+      markRefIdAsProcessed(args.refId);
+
+      const pending: Omit<PendingPayment, 'createdAt'> = { type: 'ln_invoice', ...args };
+      storePendingConfirmation(targetUser, pending);
+
+      const prompt = `Approve payment for Lightning invoice? Reply YES within 5 minutes to confirm.`;
+      enqueueIdentityOut({
+        to: targetUser,
+        body: prompt,
+        gateway: { type: targetGateway, npub: getEnv('GATEWAY_NPUB', '').trim() }
+      });
+      console.log(`[CVM] Enqueued approval prompt via ${targetGateway} to ${targetUser}`);
+
+      return { status: "pending", details: `Awaiting user confirmation via ${targetGateway}.` };
+    }
+  );
+
+  mcpServer.registerTool(
+    "getBalance",
+    {
+      title: "Get Balance",
+      description: "Fetches the current wallet balance in sats",
+      inputSchema: {
+        npub: z.string(),
+        refId: z.string(),
+      },
+    },
+    async (args) => {
+      console.log(`[CVM] Received 'getBalance' request for npub: ${args.npub}`);
+      
+      // For now, we assume the shared wallet. In the future, this would look up the user's specific wallet.
+      const result = await getBalance();
+
+      if (result.success) {
+        return {
+          status: "complete",
+          npub: args.npub,
+          balance: result.balance,
+        };
+      } else {
+        return {
+          status: "failed",
+          npub: args.npub,
+          error: result.error,
+        };
+      }
+    }
+  );
+
+  mcpServer.registerTool(
+    "getLNInvoice",
+    {
+      title: "Get Lightning Invoice",
+      description: "Creates a new BOLT11 Lightning invoice for a specified amount",
+      inputSchema: {
+        npub: z.string(),
+        refId: z.string(),
+        amount: z.number(), // in sats
+      },
+    },
+    async (args) => {
+      console.log(`[CVM] Received 'getLNInvoice' request for ${args.amount} sats from npub: ${args.npub}`);
+      
+      const result = await createInvoice(args.amount);
+
+      if (result.success) {
+        return {
+          status: "complete",
+          description: "Invoice created.",
+          ln_Invoice: result.invoice,
+          npub: args.npub,
+          refId: args.refId,
+          amount: args.amount,
+        };
+      } else {
+        return {
+          status: "error",
+          description: result.error,
+          npub: args.npub,
+          refId: args.refId,
+          amount: args.amount,
+        };
+      }
+    }
+  );
+
+  mcpServer.registerTool(
+    "getLNAddress",
+    {
+      title: "Get Lightning Address",
+      description: "Fetches the user's Lightning Address",
+      inputSchema: {
+        npub: z.string(),
+        refId: z.string(),
+      },
+    },
+    async (args) => {
+      console.log(`[CVM] Received 'getLNAddress' request from npub: ${args.npub}`);
+      
+      const result = await getLNAddress();
+
+      if (result.success) {
+        return {
+          status: "complete",
+          description: "LN Address retrieved.",
+          ln_address: result.lnAddress,
+          npub: args.npub,
+          refId: args.refId,
+        };
+      } else {
+        return {
+          status: "error",
+          description: result.error,
+          npub: args.npub,
+          refId: args.refId,
+        };
+      }
     }
   );
   

@@ -12,7 +12,7 @@ const SERVER_PUBKEY = "2e7e636738142c8641848674b9102401e0f40dd3f885504fda2dcbbc0
 
 // This is a temporary client private key. Can be anything.
 const CLIENT_PRIVATE_KEY_HEX = "66a628380b51d3362734b5e1a36d388049411b021e42a401437034384248a32d";
-const RELAYS = ["wss://relay.contextvm.org", "wss://cvm.otherstuff.ai"];
+const RELAYS = ["wss://cvm.otherstuff.ai"];
 
 // This is the npub of the user you mapped in the database.
 // The test will fail if this user doesn't exist in your `local_npub_map` table.
@@ -38,20 +38,40 @@ async function main() {
   await mcpClient.connect(clientTransport);
   console.log("Connected!");
 
-  console.log('\nCalling the "payLnAddress" tool...');
-  const result = await mcpClient.callTool({
-    name: "payLnAddress",
+  console.log('\nStep 1: Calling "getLNInvoice" to create an invoice...');
+  const invoiceResult: any = await mcpClient.callTool({
+    name: "getLNInvoice",
     arguments: {
       npub: USER_NPUB,
-      refId: "test-" + Date.now(),
-      lnAddress: "testLNAddress",
-      amount: 5000,
-      responsePubkey: "a_mock_brain_pubkey", // This would be the Brain's CVM pubkey
+      refId: "test-invoice-" + Date.now(),
+      amount: 21, // sats
+    },
+  });
+
+  if (invoiceResult.status !== 'complete' || !invoiceResult.ln_Invoice) {
+    console.error("Failed to get an invoice to pay:", invoiceResult);
+    await mcpClient.close();
+    return;
+  }
+
+  const invoiceToPay = invoiceResult.ln_Invoice;
+  console.log(`Successfully created invoice: ${invoiceToPay.substring(0, 40)}...`);
+
+  console.log('\nStep 2: Calling "payLnInvoice" to pay the invoice...');
+  const paymentResult = await mcpClient.callTool({
+    name: "payLnInvoice",
+    arguments: {
+      npub: USER_NPUB,
+      refId: "test-payment-" + Date.now(),
+      lnInvoice: invoiceToPay,
+      responsePubkey: "a_mock_brain_pubkey",
       responseTool: "confirmPayment",
     },
   });
 
-  console.log("Tool call result:", result);
+  console.log("\nPayment tool call result:", paymentResult);
+  console.log("Note: This will be 'pending'. You must reply 'YES' in the web UI to complete the payment.");
+
 
   await mcpClient.close();
   console.log("\nConnection closed.");
