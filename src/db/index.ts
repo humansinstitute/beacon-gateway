@@ -29,7 +29,7 @@ function migrate(db: Database) {
     const row = db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`).get() as any;
     current = row?.v || null;
   } catch {}
-  const target = '7';
+  const target = '8';
   const needsReset = current !== target;
 
   if (needsReset) {
