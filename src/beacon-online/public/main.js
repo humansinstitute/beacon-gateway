@@ -41,7 +41,7 @@ function output(out, instance) {
 }
 
 // node_modules/@noble/curves/node_modules/@noble/hashes/esm/crypto.js
-var crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : undefined;
+var crypto2 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : undefined;
 
 // node_modules/@noble/curves/node_modules/@noble/hashes/esm/utils.js
 /*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
@@ -90,8 +90,8 @@ function wrapConstructor(hashCons) {
   return hashC;
 }
 function randomBytes(bytesLength = 32) {
-  if (crypto && typeof crypto.getRandomValues === "function") {
-    return crypto.getRandomValues(new Uint8Array(bytesLength));
+  if (crypto2 && typeof crypto2.getRandomValues === "function") {
+    return crypto2.getRandomValues(new Uint8Array(bytesLength));
   }
   throw new Error("crypto.getRandomValues must be defined");
 }
@@ -1895,7 +1895,7 @@ var schnorr = /* @__PURE__ */ (() => ({
 }))();
 
 // node_modules/nostr-tools/node_modules/@noble/hashes/esm/crypto.js
-var crypto2 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : undefined;
+var crypto3 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : undefined;
 
 // node_modules/nostr-tools/node_modules/@noble/hashes/esm/utils.js
 /*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
@@ -1970,8 +1970,8 @@ function wrapConstructor2(hashCons) {
   return hashC;
 }
 function randomBytes2(bytesLength = 32) {
-  if (crypto2 && typeof crypto2.getRandomValues === "function") {
-    return crypto2.getRandomValues(new Uint8Array(bytesLength));
+  if (crypto3 && typeof crypto3.getRandomValues === "function") {
+    return crypto3.getRandomValues(new Uint8Array(bytesLength));
   }
   throw new Error("crypto.getRandomValues must be defined");
 }
@@ -6366,6 +6366,17 @@ var btnSendId = $("#send-id");
 var btnSendBrain = $("#send-brain");
 var btnGenKey = $("#gen-key");
 var npubEl = $("#npub");
+function uuid() {
+  const anyCrypto = crypto;
+  if (anyCrypto && typeof anyCrypto.randomUUID === "function")
+    return anyCrypto.randomUUID();
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  buf[6] = buf[6] & 15 | 64;
+  buf[8] = buf[8] & 63 | 128;
+  const hex2 = [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex2.slice(0, 8)}-${hex2.slice(8, 12)}-${hex2.slice(12, 16)}-${hex2.slice(16, 20)}-${hex2.slice(20)}`;
+}
 function loadKey() {
   const raw = localStorage.getItem("beacon-online-nsec");
   if (!raw)
@@ -6443,15 +6454,20 @@ async function send(box, text) {
   const created_at = Math.floor(Date.now() / 1000);
   const draft = { kind: 1, created_at, tags: [["box", box]], content: text, pubkey: k.pk };
   const event = finalizeEvent(draft, k.sk);
-  console.log("[beacon-online] sending event", { box, event });
-  const body = { box, event };
+  const type = box === "brain" ? "online_brain" : "online_id";
+  const refId = uuid();
+  const body = { box, type, refId, event };
+  console.log("[beacon-online] sending event", { ...body });
   const res = await fetch("/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) {
     console.error("send failed", res.status, await res.text());
     return;
   }
   const resp = await res.json().catch(() => ({}));
-  console.log("[beacon-online] server stored draft", resp);
+  console.log("[beacon-online] server stored draft (minimal)", resp);
+  if (resp?.cvmRequest) {
+    console.log("[beacon-online] CVM request payload", resp.cvmRequest);
+  }
   await refreshAll();
 }
 btnGenKey?.addEventListener("click", () => {
@@ -6484,6 +6500,39 @@ inputBrain?.addEventListener("keydown", (e) => {
 });
 ensureKey();
 refreshAll().catch(console.error);
-setInterval(() => {
-  refreshAll().catch(() => {});
-}, 2000);
+function setupSse(box) {
+  const k = ensureKey();
+  if (!k)
+    return;
+  const es = new EventSource(`/api/stream?box=${box}&pubkey=${encodeURIComponent(k.pk)}`);
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      console.log("[beacon-online] SSE", box, data);
+      if (data?.type === "insert" && data?.message) {
+        const msg = data.message;
+        if (box === "id") {
+          const items = [msg];
+          render(listId, listId._items ? listId._items.concat(items) : items);
+          listId._items = (listId._items || []).concat(items);
+        } else {
+          const items = [msg];
+          render(listBrain, listBrain._items ? listBrain._items.concat(items) : items);
+          listBrain._items = (listBrain._items || []).concat(items);
+        }
+        refreshAll().catch(() => {});
+      }
+    } catch (e) {
+      console.warn("bad SSE payload", e);
+    }
+  };
+  es.onerror = () => {
+    console.warn("SSE error, retrying in 3s");
+    try {
+      es.close();
+    } catch {}
+    setTimeout(() => setupSse(box), 3000);
+  };
+}
+setupSse("id");
+setupSse("brain");

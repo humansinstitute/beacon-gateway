@@ -1,6 +1,7 @@
 import { serve } from "bun";
 import { mkdir } from "node:fs/promises";
 import { Database } from "bun:sqlite";
+import { nip19 } from 'nostr-tools';
 import { setTimeout as delay } from "node:timers/promises";
 
 type Box = "id" | "brain";
@@ -105,30 +106,21 @@ async function handleApi(req: Request) {
       return new Response(JSON.stringify({ error: "Invalid box" }), { status: 400 });
     }
     const ts = event.created_at || Math.floor(Date.now() / 1000);
-    const derivedType = (payload.type && typeof payload.type === 'string')
-      ? payload.type
-      : (box === 'brain' ? 'web_brain' : 'web_id');
+    const derivedType = box === 'brain' ? 'online_brain' : 'online_id';
     const refId = (payload.refId && typeof payload.refId === 'string' && payload.refId) || crypto.randomUUID();
-
-    const routing = {
-      fromGatewayNpub: process.env.BEACON_ONLINE_GATEWAY_NPUB || '',
-      fromGatewayHex: process.env.BEACON_ONLINE_GATEWAY_HEX || '',
-      toHex: box === 'brain' ? (process.env.BRAIN_CVM_HEX || '') : (process.env.ID_CVM_HEX || ''),
-    };
-    const meta = {
-      kind: 'outbound',
-      box,
-      type: derivedType,
+    const cvmRequest = {
+      gatewayNpub: process.env.BEACON_ONLINE_GATEWAY_NPUB || '',
+      localGatewayID: event.pubkey,
+      gateway_type: derivedType,
+      message: event.content,
       refId,
-      routing,
-      event,
     };
     const db = dbByBox[box];
     const stmt = db.query(
       `INSERT INTO messages(created_at, pubkey, box, content, signature, event_id, status, type, direction, ref_id, metadata)
        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, 'out', ?, ?)`
     );
-    const info = stmt.run(ts, event.pubkey, box, event.content, event.sig, event.id, derivedType, refId, JSON.stringify(meta));
+    const info = stmt.run(ts, event.pubkey, box, event.content, event.sig, event.id, derivedType, refId, JSON.stringify({ cvmRequest }));
 
     const stored = {
       id: Number(info.lastInsertRowid),
@@ -142,31 +134,90 @@ async function handleApi(req: Request) {
       direction: 'out',
       ref_id: refId,
       remote_ref: null,
-      metadata: meta,
+      metadata: { cvmRequest },
     } satisfies Omit<MessageRow, 'metadata'> & { metadata: unknown };
 
-    console.log('[beacon-online] stored outbound draft', stored);
+    console.log('[beacon-online] outbound draft (minimal)', {
+      id: stored.id,
+      created_at: stored.created_at,
+      pubkey: stored.pubkey,
+      box: stored.box,
+      status: stored.status,
+      type: stored.type,
+      cvmRequest,
+    });
     // Broadcast SSE update
     broadcast(box, event.pubkey, { type: 'insert', message: stored });
-    return Response.json(stored);
+    // Fire-and-forget: try to call remote CVM receiveMessage
+    ;(async () => {
+      const toServerHex = box === 'brain' ? (process.env.BRAIN_CVM_HEX || '') : (process.env.ID_CVM_HEX || '');
+      const priv = (process.env.BEACON_ONLINE_PRIV_GATEWAY_HEX || '').trim();
+      if (!toServerHex || !priv) {
+        console.warn('[beacon-online] CVM send skipped: missing toServerHex or BEACON_ONLINE_PRIV_GATEWAY_HEX');
+        return;
+      }
+      try {
+        const { callRemoteReceiveMessage } = await import('./cvm/client');
+        const userNpub = (() => { try { return nip19.npubEncode(stored.pubkey); } catch { return ''; } })();
+        const args = {
+          gatewayID: userNpub || stored.pubkey,
+          gatewayNpub: process.env.BEACON_ONLINE_GATEWAY_NPUB || '',
+          type: derivedType as 'online_id' | 'online_brain',
+          message: stored.content,
+          refId,
+        };
+        console.log('[beacon-online] CVM send (attempt)', args);
+        const res = await callRemoteReceiveMessage({
+          toServerHex,
+          privateKeyHex: priv,
+          args,
+        });
+        const preview = (() => { try { const j = JSON.stringify(res); return j.length > 500 ? j.slice(0,500)+'…' : j; } catch { return String(res); } })();
+        const ok = true;
+        // Update status to 'sent' (optimistic); if remote replies success explicitly we can mark 'ack'
+        const upd = db.prepare(`UPDATE messages SET status = 'sent' WHERE id = ?`);
+        upd.run(stored.id);
+        await broadcast(box, stored.pubkey, { type: 'update', message: { id: stored.id, status: 'sent' } });
+        console.log('[beacon-online] CVM send result', { refId, box, toServerHex: toServerHex.slice(0,8)+'…', ok, preview });
+      } catch (err) {
+        console.error('[beacon-online] CVM send failed', err);
+        try {
+          const upd = db.prepare(`UPDATE messages SET status = 'failed' WHERE id = ?`);
+          upd.run(stored.id);
+          await broadcast(box, stored.pubkey, { type: 'update', message: { id: stored.id, status: 'failed' } });
+        } catch {}
+      }
+    })();
+
+    return Response.json({
+      id: stored.id,
+      created_at: stored.created_at,
+      pubkey: stored.pubkey,
+      box: stored.box,
+      content: stored.content,
+      status: stored.status,
+      type: stored.type,
+      ref_id: stored.ref_id,
+      cvmRequest,
+    });
   }
 
   return new Response("Not found", { status: 404 });
 }
 
 // --- SSE support ---
-type Client = { write: (s: string) => void; close: () => void };
+type Client = { write: (s: string) => Promise<void>; close: () => void };
 const clients: Map<string, Set<Client>> = new Map(); // key = `${box}|${pubkey}`
 
 function keyFor(box: Box, pubkey: string) { return `${box}|${pubkey}`; }
 
-function broadcast(box: Box, pubkey: string, payload: unknown) {
+async function broadcast(box: Box, pubkey: string, payload: unknown) {
   const key = keyFor(box, pubkey);
   const group = clients.get(key);
   if (!group || group.size === 0) return;
   const data = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const c of group) {
-    try { c.write(data); } catch { /* ignore */ }
+  for (const c of [...group]) {
+    try { await c.write(data); } catch { try { c.close(); } catch {} group.delete(c); }
   }
 }
 
@@ -181,9 +232,10 @@ async function handleSse(req: Request) {
   const stream = new TransformStream();
   const writer = stream.writable.getWriter();
   const encoder = new TextEncoder();
-  const write = (s: string) => writer.write(encoder.encode(s));
+  const write = async (s: string) => { await writer.write(encoder.encode(s)); };
   const flushHello = async () => {
-    await write(`: connected\n`);
+    await write(`event: hello\n`);
+    await write(`data: ok\n\n`);
     await write(`retry: 3000\n\n`);
   };
   const client: Client = {
@@ -206,11 +258,13 @@ async function handleSse(req: Request) {
     }
   })();
 
-  // Remove on close
+  // Remove on close/abort
   const onClose = () => {
     const set = clients.get(key);
     if (set) set.delete(client);
+    try { writer.close(); } catch {}
   };
+  (req.signal as AbortSignal).addEventListener('abort', onClose);
 
   // Kick off initial send
   flushHello();
@@ -221,14 +275,15 @@ async function handleSse(req: Request) {
     connection: 'keep-alive',
   } as Record<string, string>;
   const res = new Response(stream.readable, { headers });
-  (res as any).onclose = onClose;
-  (res as any).onerror = onClose;
+  // Bun doesn't expose onclose/onerror here; rely on abort signal cleanup and write failures.
   return res;
 }
 
 const port = Number(process.env.REMOTE_PORT || process.env.PORT || 8788);
 const server = serve({
   port,
+  // Keep connections (SSE) alive; 0 = disable timeout in Bun
+  idleTimeout: 0,
   async fetch(req: Request) {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/api/")) {
@@ -267,3 +322,25 @@ const server = serve({
 });
 
 console.log(`[beacon-online] server listening on :${server.port} (env REMOTE_PORT=${process.env.REMOTE_PORT || ''})`);
+
+// Start CVM server (receiveMessage tool) alongside HTTP server
+import { startBeaconOnlineCvmServer } from './cvm/server';
+(async () => {
+  try {
+    await startBeaconOnlineCvmServer({
+      insertInbound: async ({ box, pubkeyHex, content, refId }) => {
+        const ts = Math.floor(Date.now() / 1000);
+        const db = dbByBox[box];
+        const stmt = db.query(
+          `INSERT INTO messages(created_at, pubkey, box, content, signature, event_id, status, type, direction, ref_id, metadata)
+           VALUES (?, ?, ?, ?, ?, ?, 'ack', ?, 'in', ?, ?)`
+        );
+        const info = stmt.run(ts, pubkeyHex, box, content, '', `remote:${refId || ''}`, box === 'brain' ? 'online_brain' : 'online_id', refId || null, JSON.stringify({ source: 'cvm_receiveMessage' }));
+        return Number(info.lastInsertRowid);
+      },
+      broadcast: (box, pubkeyHex, payload) => broadcast(box, pubkeyHex, payload),
+    });
+  } catch (err) {
+    console.error('[beacon-online] failed to start CVM server', err);
+  }
+})();

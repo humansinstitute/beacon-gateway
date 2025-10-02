@@ -5,6 +5,7 @@ import { startNostrAdapter } from './gateway/nostr';
 import { startMeshAdapter } from './gateway/mesh';
 import { startCvmServer } from './identity/cvm';
 import { startIdentityWorker } from './identity/worker';
+import { startOnlineAdapter } from './gateway/online';
 import { enqueueIdentityBeacon, consumeIdentityOut } from './identity/queues';
 
 function main() {
@@ -30,6 +31,8 @@ function main() {
 
   // Start identity worker
   startIdentityWorker();
+  // Online adapter for Identity path -> online_id
+  startOnlineAdapter({ type: 'online_id' });
 
   // Minimal HTTP server for health
   const port = parseInt(getEnv('PORT', '3010') || '3010', 10);

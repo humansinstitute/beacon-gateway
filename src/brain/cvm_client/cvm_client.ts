@@ -39,6 +39,15 @@ export type GetLNAddressArgs = {
   refId: string;
 };
 
+// Beacon Online server: receiveMessage tool arguments
+export type BeaconOnlineReceiveArgs = {
+  gatewayID: string; // user's npub or 64-hex
+  gatewayNpub: string; // gateway identifier (npub)
+  type: 'online_id' | 'online_brain';
+  message: string;
+  refId?: string;
+};
+
 export class CvmClient {
   private mcp?: McpClient;
   private transport?: NostrClientTransport;
@@ -214,6 +223,34 @@ export class CvmClient {
     return res;
   }
 
+  // Beacon Online: call the `receiveMessage` tool exposed by the Beacon Online server
+  async receiveWebMessage(args: BeaconOnlineReceiveArgs) {
+    await this.connect();
+    if (!this.mcp) throw new Error('MCP client not initialized');
+
+    if (!args || !args.gatewayID || !args.gatewayNpub || !args.type || typeof args.message !== 'string') {
+      throw new Error('receiveMessage: missing required fields');
+    }
+
+    console.log('[cvm_client] call receiveMessage', {
+      event: 'call',
+      name: 'receiveMessage',
+      refId: args.refId || '',
+      type: args.type,
+      gatewayID: String(args.gatewayID).slice(0, 12) + '…',
+      gatewayNpub: String(args.gatewayNpub).slice(0, 12) + '…',
+    });
+
+    const res = await this.mcp.callTool({ name: 'receiveMessage', arguments: args });
+    try {
+      const preview = safePreview(res);
+      console.log('[cvm_client] receiveMessage result', { refId: args.refId || '', status: 'ok', preview });
+    } catch {
+      console.log('[cvm_client] receiveMessage result (unserializable)', { refId: args.refId || '', status: 'ok' });
+    }
+    return res;
+  }
+
   async close(): Promise<void> {
     try {
       await this.mcp?.close();
@@ -255,6 +292,20 @@ export async function getLNInvoice(args: GetLNInvoiceArgs) {
 export async function getLNAddress(args: GetLNAddressArgs) {
   const client = getCvmClient();
   return client.getLNAddress(args);
+}
+
+// Helper to target Beacon Online server using its own env vars.
+export async function sendBeaconOnlineMessage(args: BeaconOnlineReceiveArgs) {
+  const serverPub = getEnv('BEACON_ONLINE_GATEWAY_HEX', '').trim();
+  // Use the same signing key convention as the rest of the client
+  const priv = getEnv('BRAIN_CVM_PRIVATE_KEY', '').trim();
+  // Use a dedicated client instance so we don't disturb the brain client's singleton target
+  const client = new CvmClient(serverPub, priv);
+  try {
+    return await client.receiveWebMessage(args);
+  } finally {
+    await client.close();
+  }
 }
 
 function safePreview(obj: unknown): unknown {

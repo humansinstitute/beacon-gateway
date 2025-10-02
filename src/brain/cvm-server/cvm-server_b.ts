@@ -3,6 +3,8 @@ import { ApplesauceRelayPool, NostrServerTransport, PrivateKeySigner } from '@co
 import { z } from 'zod';
 import { getEnv } from '../../types';
 import { getOutboundContext, forget } from '../beacon_store';
+import { enqueueBeacon } from '../../queues';
+import { toBeaconMessage } from '../../types';
 
 // Default relays
 const RELAYS = ['wss://cvm.otherstuff.ai']; // 'wss://relay.contextvm.org', -> currently down
@@ -221,6 +223,59 @@ function normalizeWhatsAppJid(input: string): string | null {
       } catch (err) {
         console.error('[brain-cvm] confirmPayment handler error', { err });
         return { status: 'error', details: String((err as Error)?.message || err) };
+      }
+    }
+  );
+
+  // Register receiveMessage tool for Beacon Online -> Brain/ID
+  mcpServer.registerTool(
+    'receiveMessage',
+    {
+      title: 'Receive Web Message',
+      description: 'Enqueue a message from Beacon Online for processing',
+      inputSchema: {
+        gatewayID: z.string().min(10), // user npub on this gateway
+        gatewayNpub: z.string().min(10), // the originating gateway npub
+        type: z.enum(['online_id', 'online_brain']),
+        message: z.string().min(1),
+        refId: z.string().optional(),
+      },
+    },
+    async (args) => {
+      try {
+        const gatewayID = String((args as any).gatewayID || '').trim();
+        const gatewayNpub = String((args as any).gatewayNpub || '').trim();
+        const msgType = String((args as any).type || '').trim();
+        const messageText = String((args as any).message || '').toString();
+        const refId = (args as any).refId ? String((args as any).refId) : undefined;
+
+        if (!gatewayID || !gatewayID.startsWith('npub')) {
+          return { status: 'failure', description: 'invalid gatewayID (expect npub)' };
+        }
+        if (!gatewayNpub || !gatewayNpub.startsWith('npub')) {
+          return { status: 'failure', description: 'invalid gatewayNpub (expect npub)' };
+        }
+        if (msgType !== 'online_id' && msgType !== 'online_brain') {
+          return { status: 'failure', description: 'invalid type' };
+        }
+        if (!messageText) {
+          return { status: 'failure', description: 'empty message' };
+        }
+
+        const gateway = { type: 'web' as const, npub: gatewayNpub };
+        const envelope = toBeaconMessage(
+          { source: 'cvm_receiveMessage', refId, gatewayID, type: msgType },
+          gateway,
+          { from: gatewayID, text: messageText }
+        );
+        // Route to brain worker via beacon queue
+        enqueueBeacon(envelope);
+
+        console.log('[brain-cvm] receiveMessage enqueued', { refId, gatewayNpub: gateway.npub.slice(0,8)+'…', user: gatewayID.slice(0,8)+'…', type: msgType });
+        return { status: 'success', description: `insert refid ${refId || ''}` };
+      } catch (err) {
+        console.error('[brain-cvm] receiveMessage error', err);
+        return { status: 'failure', description: 'unexpected error' };
       }
     }
   );

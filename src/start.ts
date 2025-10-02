@@ -8,6 +8,7 @@ import { startBrainWorker } from './brain/worker';
 import { getOutboundContext, forget } from './brain/beacon_store';
 import { logAction, createOutboundMessage } from './db';
 import { startBrainCvmServer } from './brain/cvm-server/cvm-server_b';
+import { startOnlineAdapter } from './gateway/online';
 
 function main() {
   const npub = getEnv('GATEWAY_NPUB', '');
@@ -26,6 +27,8 @@ function main() {
   startBrainWorker();
   // Start Brain CVM server
   startBrainCvmServer().catch(err => console.error('[brain-cvm] failed to start', err));
+  // Start Online adapter (Brain path -> online_brain)
+  startOnlineAdapter({ type: 'online_brain' });
 
 
   // Minimal HTTP server for health and webhooks

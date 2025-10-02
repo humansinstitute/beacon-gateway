@@ -13,6 +13,17 @@ const npubEl = $('#npub')
 type Box = 'id' | 'brain'
 type UiMessage = { id: number; created_at: number; content: string; status?: string }
 
+function uuid(): string {
+  const anyCrypto: any = crypto as any
+  if (anyCrypto && typeof anyCrypto.randomUUID === 'function') return anyCrypto.randomUUID()
+  const buf = new Uint8Array(16)
+  crypto.getRandomValues(buf)
+  buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
+  buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
+  const hex = [...buf].map(b => b.toString(16).padStart(2,'0')).join('')
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`
+}
+
 function loadKey() {
   const raw = localStorage.getItem('beacon-online-nsec')
   if (!raw) return null
@@ -89,8 +100,8 @@ async function send(box: Box, text: string) {
   const created_at = Math.floor(Date.now() / 1000)
   const draft = { kind: 1, created_at, tags: [['box', box]], content: text, pubkey: k.pk }
   const event = finalizeEvent(draft as any, k.sk)
-  const type = box === 'brain' ? 'web_brain' : 'web_id'
-  const refId = crypto.randomUUID()
+  const type = box === 'brain' ? 'online_brain' : 'online_id'
+  const refId = uuid()
   const body = { box, type, refId, event }
   console.log('[beacon-online] sending event', { ...body })
   const res = await fetch('/api/messages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -99,7 +110,10 @@ async function send(box: Box, text: string) {
     return
   }
   const resp = await res.json().catch(() => ({} as any))
-  console.log('[beacon-online] server stored draft', resp)
+  console.log('[beacon-online] server stored draft (minimal)', resp)
+  if (resp?.cvmRequest) {
+    console.log('[beacon-online] CVM request payload', resp.cvmRequest)
+  }
   await refreshAll()
 }
 
@@ -159,7 +173,7 @@ function setupSse(box: Box) {
   }
   es.onerror = () => {
     console.warn('SSE error, retrying in 3s')
-    es.close()
+    try { es.close() } catch {}
     setTimeout(() => setupSse(box), 3000)
   }
 }
