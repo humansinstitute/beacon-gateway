@@ -86,30 +86,8 @@ export function startWebAdapter(options?: {
             from,
             text,
           });
-          // Map to canonical user npub if present. If missing, send prompt via web channel and stop.
-          const mapped = await ensureMappedOrPrompt('web', npub, from, (promptText) => {
-            try {
-              const { messageId, deliveryId } = createOutboundMessage({
-                conversationId: beacon.meta?.conversationID || '',
-                replyToMessageId: undefined,
-                role: 'beacon',
-                userNpub: null,
-                content: { text: promptText || UNKNOWN_USER_PROMPT, to: from },
-                metadata: { gateway: gateway },
-                channel: gateway.type,
-              });
-              broadcast('outbound', { to: from, text: promptText || UNKNOWN_USER_PROMPT, messageId, deliveryId });
-              transitionDelivery(deliveryId, 'sent', { providerMessageId: 'web:' + messageId });
-              logAction(beacon.beaconID, 'web_prompt_connect_code', { to: from }, 'ok');
-            } catch {}
-          });
-          if (!mapped) {
-            broadcast('inbound_ack', { from, text, beaconID: beacon.beaconID });
-            return json({ ok: true, beaconID: beacon.beaconID, mapped: false });
-          }
-
-          // Known user: set mapping and enqueue for processing
-          beacon.meta.userNpub = mapped;
+          // The identity worker is now responsible for handling unknown users and onboarding.
+          // We will enqueue all messages for processing.
           enqueueBeacon(beacon);
 
           // Also announce to connected clients immediately

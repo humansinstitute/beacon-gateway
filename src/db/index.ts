@@ -29,7 +29,7 @@ function migrate(db: Database) {
     const row = db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`).get() as any;
     current = row?.v || null;
   } catch {}
-  const target = '5';
+  const target = '7';
   const needsReset = current !== target;
 
   if (needsReset) {
@@ -40,6 +40,7 @@ function migrate(db: Database) {
     DROP TABLE IF EXISTS actions;
     DROP TABLE IF EXISTS local_npub_map;
     DROP TABLE IF EXISTS conversation_state;
+    DROP TABLE IF EXISTS user_wallets;
     PRAGMA foreign_keys=ON;
     `);
 
@@ -113,6 +114,14 @@ function migrate(db: Database) {
       summary TEXT NOT NULL,
       message_count INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL
+    );
+
+    -- User wallets
+    CREATE TABLE IF NOT EXISTS user_wallets (
+      user_npub TEXT PRIMARY KEY,
+      encrypted_nwc_string TEXT NOT NULL,
+      ln_address TEXT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
     );
     `);
 
