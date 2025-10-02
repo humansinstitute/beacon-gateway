@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Beacon Online</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, system-ui, sans-serif; }
+      .app { display: flex; height: 100%; }
+      .pane { flex: 1; display: flex; flex-direction: column; border-left: 1px solid #eee; }
+      .pane:first-child { border-left: none; }
+      .header { padding: 10px; background: #fafafa; border-bottom: 1px solid #eee; display:flex; align-items:center; gap:10px; }
+      .title { font-weight: 600; }
+      .messages { flex: 1; overflow: auto; padding: 10px; }
+      .msg { padding: 6px 8px; margin: 6px 0; border-radius: 8px; background: #f3f4f6; display:flex; align-items:baseline; gap:6px; }
+      .badge { font-size: 10px; color:#a16207; background:#fef3c7; border:1px solid #fde68a; padding:2px 6px; border-radius:999px; }
+      .footer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eee; }
+      input[type=text] { flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+      button { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; background: #fff; cursor: pointer; }
+      .row { display:flex; align-items:center; gap:10px; }
+      .small { color:#666; font-size: 12px; }
+      .npub { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="header" style="border-bottom:1px solid #eee;">
+      <div class="row" style="flex:1;">
+        <div class="title">Beacon Online</div>
+      </div>
+      <div class="row">
+        <button id="gen-key">Generate Ephemeral Key</button>
+      </div>
+      <div class="row small">
+        <div>npub:</div>
+        <div id="npub" class="npub">-</div>
+      </div>
+    </div>
+    <div class="app">
+      <div class="pane" id="pane-id">
+        <div class="header"><div class="title">Beacon ID</div></div>
+        <div class="messages" id="list-id"></div>
+        <div class="footer">
+          <input id="input-id" type="text" placeholder="Type a message to Beacon ID..." />
+          <button id="send-id">Send</button>
+        </div>
+      </div>
+      <div class="pane" id="pane-brain">
+        <div class="header"><div class="title">Beacon Brain</div></div>
+        <div class="messages" id="list-brain"></div>
+        <div class="footer">
+          <input id="input-brain" type="text" placeholder="Type a message to Beacon Brain..." />
+          <button id="send-brain">Send</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/main.js"></script>
+  </body>
+  </html>

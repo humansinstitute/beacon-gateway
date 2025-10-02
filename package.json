@@ -13,6 +13,7 @@
     "dev:modular": "bun --watch src/start.ts"
   },
   "dependencies": {
+    "nostr-tools": "^2.7.1",
     "@contextvm/sdk": "^0.1.29",
     "@modelcontextprotocol/sdk": "^1.18.2",
     "applesauce-core": "^4.0.0",

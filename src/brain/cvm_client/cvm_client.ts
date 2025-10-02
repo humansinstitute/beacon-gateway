@@ -3,7 +3,7 @@ import { ApplesauceRelayPool, NostrClientTransport, PrivateKeySigner } from '@co
 import { getEnv } from '../../types';
 
 // Default relays for Context VM
-const RELAYS = ['wss://relay.contextvm.org', 'wss://cvm.otherstuff.ai'];
+const RELAYS = ['wss://cvm.otherstuff.ai']; //,'wss://relay.contextvm.org - currently down
 const DEBUG = (getEnv('CVM_DEBUG', '').toLowerCase() === 'true');
 
 export type PayLnAddressArgs = {
@@ -149,7 +149,13 @@ export class CvmClient {
     this.ensureUserNpub(args.npub, 'payLnInvoice');
 
     console.log('[cvm_client] call payLnInvoice', {
-      event: 'call', name: 'payLnInvoice', refId: args.refId, npub: args.npub,
+      event: 'call',
+      name: 'payLnInvoice',
+      refId: args.refId,
+      npub: args.npub,
+      lnInvoice: args.lnInvoice,
+      responsePubkey: (args.responsePubkey || '').slice(0, 8) + '…',
+      responseTool: args.responseTool,
     });
 
     const res = await this.mcp.callTool({ name: 'payLnInvoice', arguments: args });

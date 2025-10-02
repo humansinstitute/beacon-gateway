@@ -79,6 +79,8 @@ data/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+src/beacon-online/data/
+src/beacon-online/examples/
 
 # Potentially large output folders
 uploads/

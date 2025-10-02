@@ -167,6 +167,7 @@ export async function startCvmServer() {
   });
 
   // --- Tool Definitions ---
+
   mcpServer.registerTool(
     "payLnAddress",
     {
