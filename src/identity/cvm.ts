@@ -7,7 +7,8 @@ import { ApplesauceRelayPool, NostrServerTransport, NostrClientTransport, Privat
 import { z } from "zod";
 import { getEnv } from "../types";
 import { PendingPayment } from "./pending_store";
-import { enqueueIdentityOut } from "./queues";
+import { enqueueIdentityOut, enqueueIdentityBeacon } from "./queues";
+import { toBeaconMessage } from "../types";
 import { getDB } from "../db";
 import { makePayment } from "./wallet_manager";
 
@@ -159,6 +160,58 @@ export async function startCvmServer() {
         return { status: "rejected", details: `Auto-confirmed and failed. Reason: ${result.error}` };
       }
       // --- END OF TEMPORARY CODE ---
+    }
+  );
+
+  // Receive a message from Beacon Online for Identity processing
+  mcpServer.registerTool(
+    "receiveMessage",
+    {
+      title: "Receive Web Message (Identity)",
+      description: "Enqueue a message from Beacon Online for Identity processing",
+      inputSchema: {
+        gatewayID: z.string().min(10), // user npub on this gateway
+        gatewayNpub: z.string().min(10), // originating gateway npub
+        type: z.enum(["online_id", "online_brain"]),
+        message: z.string().min(1),
+        refId: z.string().optional(),
+      },
+    },
+    async (args) => {
+      try {
+        const gatewayID = String((args as any).gatewayID || '').trim();
+        const gatewayNpub = String((args as any).gatewayNpub || '').trim();
+        const msgType = String((args as any).type || '').trim();
+        const messageText = String((args as any).message || '').toString();
+        const refId = (args as any).refId ? String((args as any).refId) : undefined;
+
+        if (!gatewayID || !gatewayID.startsWith('npub')) {
+          return { status: 'failure', description: 'invalid gatewayID (expect npub)' };
+        }
+        if (!gatewayNpub || !gatewayNpub.startsWith('npub')) {
+          return { status: 'failure', description: 'invalid gatewayNpub (expect npub)' };
+        }
+        if (msgType !== 'online_id' && msgType !== 'online_brain') {
+          return { status: 'failure', description: 'invalid type' };
+        }
+        if (!messageText) {
+          return { status: 'failure', description: 'empty message' };
+        }
+
+        const gateway = { type: 'web' as const, npub: gatewayNpub };
+        const envelope = toBeaconMessage(
+          { source: 'identity_cvm_receiveMessage', refId, gatewayID, type: msgType },
+          gateway,
+          { from: gatewayID, text: messageText }
+        );
+
+        enqueueIdentityBeacon(envelope);
+        console.log('[identity-cvm] receiveMessage enqueued', { refId, gatewayNpub: gateway.npub.slice(0,8)+'…', user: gatewayID.slice(0,8)+'…', type: msgType });
+        return { status: 'success', description: `insert refid ${refId || ''}` };
+      } catch (err) {
+        console.error('[identity-cvm] receiveMessage error', err);
+        return { status: 'failure', description: 'unexpected error' };
+      }
     }
   );
   
