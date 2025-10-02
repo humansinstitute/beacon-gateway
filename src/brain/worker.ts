@@ -13,6 +13,26 @@ import { payLnAddress as cvmPayLnAddress, getBalance as cvmGetBalance, payLnInvo
 import { checkConversation } from './checkConversation';
 import { maybeConsolidate } from './conversation/consolidate.util';
 
+// Normalize and sanitize a Lightning invoice string for transport
+function normalizeLnInvoice(raw: string): string {
+  if (!raw) return raw;
+  let s = String(raw).trim();
+  // Remove URI scheme if present
+  if (/^lightning:/i.test(s)) s = s.replace(/^lightning:/i, '');
+  // Strip surrounding quotes/backticks
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")) || (s.startsWith('`') && s.endsWith('`'))) {
+    s = s.slice(1, -1).trim();
+  }
+  // Remove common trailing punctuation
+  s = s.replace(/[\s\r\n]+/g, ''); // drop any whitespace/newlines inside
+  s = s.replace(/[\.,;:!?)]$/g, '');
+  // Bech32 is case-insensitive but must not be mixed case; use lower
+  s = s.toLowerCase();
+  // Only forward invoices that look like lnbc... to avoid garbage
+  if (!s.startsWith('lnbc')) return raw; // fallback to original if it doesn't look right
+  return s;
+}
+
 export function startBrainWorker() {
   consumeBeacon(async (msg: BeaconMessage) => {
     try {
@@ -211,6 +231,7 @@ export function startBrainWorker() {
           try {
             const invoice: string | undefined = parsed?.parameters?.invoice;
             if (invoice && typeof invoice === 'string') {
+              const cleanedInvoice = normalizeLnInvoice(invoice);
               const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
               if (!npub || !npub.startsWith('npub')) {
                 const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
@@ -244,11 +265,16 @@ export function startBrainWorker() {
               await cvmPayLnInvoice({
                 npub,
                 refId: msg.beaconID,
-                lnInvoice: invoice,
+                lnInvoice: cleanedInvoice,
                 responsePubkey,
                 responseTool: 'confirmPayment',
               });
-              logAction(msg.beaconID, 'cvm_payLnInvoice', { lnInvoice: invoice.slice(0, 24) + '…', responsePubkey: responsePubkey.slice(0,8) + '…' }, 'sent');
+              logAction(
+                msg.beaconID,
+                'cvm_payLnInvoice',
+                { lnInvoice: cleanedInvoice, responsePubkey: responsePubkey },
+                'sent'
+              );
 
               const answer = `We’ve sent the request for approval to pay that Lightning invoice.`;
 
@@ -280,7 +306,12 @@ export function startBrainWorker() {
             }
           } catch (err) {
             console.error(`[brain] cvm payLnInvoice error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
-            logAction(msg.beaconID, 'cvm_payLnInvoice', { error: String((err as Error)?.message || err) }, 'failed');
+            logAction(
+              msg.beaconID,
+              'cvm_payLnInvoice',
+              { error: String((err as Error)?.message || err), lnInvoice: cleanedInvoice },
+              'failed'
+            );
           }
         }
 
