@@ -26,7 +26,7 @@ OPERATION TYPES:
    Extract: invoice string (lnbc...)
    
 3. 'receive_invoice' - User wants to create/generate an invoice to receive payment
-   Keywords: "create invoice", "generate invoice", "request payment", "invoice for", "need invoice"
+   Keywords: "create invoice", "generate invoice", "request payment", "invoice for", "need invoice", "receive $"
    Extract: amount (if specified)
    
 4. 'pay_ln_address' - User wants to pay to a lighning address name@domain.tld 
@@ -80,10 +80,13 @@ Input: "pay lnbc1000n1p..."
 Output: {"type": "pay_invoice", "parameters": {"invoice": "lnbc1000n1p..."}, "confidence": 100, "reasoning": "Lightning invoice detected for payment"}
 
 Input: "create invoice for 5000 sats"
-Output: {"type": "receive_invoice", "parameters": {"amount": 5000}, "confidence": 90, "reasoning": "Invoice creation request with specific amount"}
+Output: {"type": "receive_invoice", "parameters": {"amount": 5000, "currency":"sats"}, "confidence": 90, "reasoning": "Invoice creation request with specific amount"}
+
+Input: "create invoice for $2"
+Output: {"type": "receive_invoice", "parameters": {"amount": 2, "currency":"dollars"}, "confidence": 90, "reasoning": "Invoice creation request with specific amount"}
 
 Input: "send 1000 sats to alice@sats.com"
-Output: {"type": "pay_ln_address", "parameters": {"amount": 1000, "recipient": "alice@sats.com"}, "confidence": 85, "reasoning": "Send request with amount and recipient"}`;
+Output: {"type": "pay_ln_address", "parameters": {"amount": 1000, "currency":"sats", "recipient": "alice@sats.com"}, "confidence": 85, "reasoning": "Send request with amount and recipient"}`;
 
   const enrichedContext = ((context || '') + ' The date today is: ' + dayToday).trim();
 

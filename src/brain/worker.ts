@@ -135,8 +135,17 @@ export function startBrainWorker() {
         // Handle receive_invoice by generating an LN invoice via CVM
         if (parsed?.type === 'receive_invoice') {
           try {
-            const amountRaw: unknown = parsed?.parameters?.amount;
-            const amount = (typeof amountRaw === 'number' && Number.isFinite(amountRaw) && amountRaw > 0) ? Math.round(amountRaw) : undefined;
+            const params = parsed?.parameters || {};
+            const amountRaw: unknown = params?.amount;
+            const currencyRaw: string = (params?.currency || 'sats').toString().toLowerCase();
+            const satsPerDollar = Number(getEnv('SATS_PER_DOLLAR', '1000')) || 1000;
+
+            let amount: number | undefined;
+            if (typeof amountRaw === 'number' && Number.isFinite(amountRaw) && amountRaw > 0) {
+              amount = (currencyRaw === 'dollars' || currencyRaw === 'usd')
+                ? Math.round(amountRaw * satsPerDollar)
+                : Math.round(amountRaw);
+            }
             const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
             if (!npub || !npub.startsWith('npub')) {
               const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
@@ -151,7 +160,7 @@ export function startBrainWorker() {
               const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
             }
             if (!amount) {
-              const answer = 'Please specify an amount in sats to generate an invoice.';
+              const answer = 'Please specify an amount to generate an invoice.';
               msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
               const { messageId, deliveryId } = createOutboundMessage({
                 conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
@@ -168,7 +177,8 @@ export function startBrainWorker() {
 
             let answer: string;
             if (status === 'complete' && lnInvoice) {
-              answer = `Here’s your Lightning invoice for ${amount} sats:\n${lnInvoice}`;
+              const satsFmt = new Intl.NumberFormat('en-US').format(amount);
+              answer = `Here’s your Lightning invoice for ${satsFmt} sats:\n${lnInvoice}`;
             } else {
               answer = desc ? `Could not create invoice: ${desc}` : 'Could not create invoice right now.';
             }
