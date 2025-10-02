@@ -57,20 +57,20 @@ async function main() {
   const invoiceToPay = invoiceResult.ln_Invoice;
   console.log(`Successfully created invoice: ${invoiceToPay.substring(0, 40)}...`);
 
-  console.log('\nStep 2: Calling "payLnInvoice" to pay the invoice...');
-  const paymentResult = await mcpClient.callTool({
-    name: "payLnInvoice",
+  console.log('\nCalling the "payLnAddress" tool...');
+  const result = await mcpClient.callTool({
+    name: "payLnAddress",
     arguments: {
       npub: USER_NPUB,
-      refId: "test-payment-" + Date.now(),
-      lnInvoice: invoiceToPay,
+      refId: "test-" + Date.now(),
+      lnAddress: "beaconid@getalby.com",
+      amount: 21,
       responsePubkey: "a_mock_brain_pubkey",
       responseTool: "confirmPayment",
     },
   });
 
-  console.log("\nPayment tool call result:", paymentResult);
-  console.log("Note: This will be 'pending'. You must reply 'YES' in the web UI to complete the payment.");
+  console.log("Tool call result:", result);
 
 
   await mcpClient.close();

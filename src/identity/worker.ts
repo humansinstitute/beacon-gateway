@@ -5,7 +5,7 @@
 import { nip19 } from 'nostr-tools';
 import { consumeIdentityBeacon, enqueueIdentityOut } from './queues';
 import { retrieveAndClearConfirmation } from './pending_store';
-import { makePayment } from './wallet_manager';
+import { makePayment, validateNwcString } from './wallet_manager';
 import { getEnv, BeaconMessage } from '../types';
 import { sendPaymentConfirmation, notifyBrainOfNewUser } from './cvm';
 import { getDB } from '../db';
@@ -87,15 +87,24 @@ async function handleOnboarding(msg: BeaconMessage, messageText: string) {
     }
 
     if (state.step === 'awaiting_nwc') {
-      // TODO: Add validation for the NWC string
-      saveWalletInfo(state.npub, messageText);
-      onboardingState.set(gatewayUser, { ...state, step: 'awaiting_ln_address' });
-      enqueueIdentityOut({
-        to: gatewayUser,
-        body: "That all worked, please can you tell me your lightning address for this wallet? Or if its not available just say No",
-        gateway: msg.source.gateway,
-      });
-      console.log(`[identity] Onboarding step 2: Awaiting LN Address for ${gatewayUser}`);
+      const isValid = await validateNwcString(messageText);
+      if (isValid) {
+        saveWalletInfo(state.npub, messageText);
+        onboardingState.set(gatewayUser, { ...state, step: 'awaiting_ln_address' });
+        enqueueIdentityOut({
+          to: gatewayUser,
+          body: "That all worked, please can you tell me your lightning address for this wallet? Or if its not available just say No",
+          gateway: msg.source.gateway,
+        });
+        console.log(`[identity] Onboarding step 2: Awaiting LN Address for ${gatewayUser}`);
+      } else {
+        enqueueIdentityOut({
+          to: gatewayUser,
+          body: "Hey that didn’t work, please ensure its just a valid wallet connect string",
+          gateway: msg.source.gateway,
+        });
+        console.log(`[identity] Invalid NWC string received from ${gatewayUser}`);
+      }
       return;
     }
 
