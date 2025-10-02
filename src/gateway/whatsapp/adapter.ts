@@ -102,10 +102,9 @@ export function startWhatsAppAdapter(options?: {
           hasMedia: msg.hasMedia,
         }
       );
-      // Map gateway user to a canonical user npub via local DB mapping (if present)
-      const mapped = await ensureMappedOrPrompt('whatsapp', GATEWAY_NPUB, msg.from, (text) => client.sendMessage(msg.from, text));
-      if (!mapped) return; // do not enqueue until user is mapped
-      beacon.meta.userNpub = mapped;
+      
+      // MODIFICATION: Removed ensureMappedOrPrompt. All messages are now enqueued.
+      // The identity worker is responsible for onboarding unknown users.
       enqueueBeacon(beacon);
     } catch (e) {
       console.error('[whatsapp] error handling message:', e);

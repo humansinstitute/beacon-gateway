@@ -11,6 +11,13 @@ import { enqueueIdentityOut } from "./queues";
 import { storePendingConfirmation, retrieveAndClearConfirmation } from "./pending_store";
 import { getDB } from "../db";
 import { makePayment, getBalance, createInvoice, getLNAddress } from "./wallet_manager";
+import { nip19 } from 'nostr-tools';
+import { decode } from 'light-bolt11-decoder';
+
+// A helper to get npub from a hex pubkey
+function toNpub(hex: string): string {
+  return nip19.npubEncode(hex);
+}
 
 // --- Configuration ---
 const RELAYS = ["wss://cvm.otherstuff.ai"];
@@ -94,6 +101,46 @@ export async function sendPaymentConfirmation(
   } finally {
     await mcpClient.close();
     console.log("[CVM Client] Connection to Brain CVM server closed.");
+  }
+}
+
+export async function notifyBrainOfNewUser(params: {
+  gatewayType: string;
+  gatewayId: string;
+  npub: string;
+}) {
+  console.log(`[CVM Client] Notifying Brain of new user: ${params.npub}`);
+  const privateKey = getEnv('IDENTITY_CVM_PRIVATE_KEY', '');
+  const brainPubKey = getEnv('BRAIN_CVM_PUBLIC_KEY', '').trim();
+  if (!privateKey || !brainPubKey) {
+    console.error('[CVM Client] FATAL: CVM keys for Identity (private) or Brain (public) are not set in .env.');
+    return;
+  }
+
+  const signer = new PrivateKeySigner(privateKey);
+  const identityNpub = nip19.npubEncode(await signer.getPublicKey());
+  const relayPool = new ApplesauceRelayPool(RELAYS);
+  const clientTransport = new NostrClientTransport({ signer, relayHandler: relayPool, serverPubkey: brainPubKey });
+  const mcpClient = new McpClient({ name: "beacon-identity-client", version: "1.0.0" });
+
+  try {
+    await mcpClient.connect(clientTransport);
+    console.log("[CVM Client] Connected to Brain CVM server for onboarding.");
+    const result = await mcpClient.callTool({
+      name: "onboardUser",
+      arguments: {
+        gatewayType: params.gatewayType,
+        gatewayID: params.gatewayId,
+        Npub: params.npub,
+        beacon_id_npub: identityNpub,
+      },
+    });
+    console.log("[CVM Client] Brain responded to onboardUser call:", result);
+  } catch (error) {
+    console.error("[CVM Client] Failed to notify Brain of new user:", error);
+  } finally {
+    await mcpClient.close();
+    console.log("[CVM Client] Connection to Brain CVM server for onboarding closed.");
   }
 }
 
@@ -226,6 +273,15 @@ export async function startCvmServer() {
     },
     async (args) => {
       console.log(`[CVM] Received 'payLnInvoice' request with refId: ${args.refId}`);
+      
+      // First, validate the invoice string itself.
+      try {
+        decode(args.lnInvoice);
+      } catch (e: any) {
+        console.error(`[CVM] Invalid invoice received: ${e.message}`);
+        return { status: "error", details: `Invalid BOLT11 invoice provided: ${e.message}` };
+      }
+
       if (isRefIdProcessed(args.refId)) {
         return { status: "error", details: "Duplicate request." };
       }
@@ -269,7 +325,7 @@ export async function startCvmServer() {
       console.log(`[CVM] Received 'getBalance' request for npub: ${args.npub}`);
       
       // For now, we assume the shared wallet. In the future, this would look up the user's specific wallet.
-      const result = await getBalance();
+      const result = await getBalance(args.npub);
 
       if (result.success) {
         return {
@@ -301,7 +357,7 @@ export async function startCvmServer() {
     async (args) => {
       console.log(`[CVM] Received 'getLNInvoice' request for ${args.amount} sats from npub: ${args.npub}`);
       
-      const result = await createInvoice(args.amount);
+      const result = await createInvoice(args.npub, args.amount);
 
       if (result.success) {
         return {
@@ -337,7 +393,7 @@ export async function startCvmServer() {
     async (args) => {
       console.log(`[CVM] Received 'getLNAddress' request from npub: ${args.npub}`);
       
-      const result = await getLNAddress();
+      const result = await getLNAddress(args.npub);
 
       if (result.success) {
         return {
