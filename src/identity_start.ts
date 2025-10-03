@@ -22,6 +22,10 @@ function main() {
     const v = (getEnv('BEACON_ID_WEB', 'false') || '').toLowerCase().trim();
     return v === '1' || v === 'true' || v === 'yes' || v === 'on';
   })();
+  const enableNostr = (() => {
+    const v = (getEnv('BEACON_ID_NOSTR', 'false') || '').toLowerCase().trim();
+    return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+  })();
 
   // Start gateways (Identity scope), injecting identity-specific queues
   if (enableWhatsApp) {
@@ -40,8 +44,15 @@ function main() {
   } else {
     console.log('[identity_start] Web adapter disabled via BEACON_ID_WEB');
   }
+  if (enableNostr) {
+    startNostrAdapter({
+      enqueueBeacon: enqueueIdentityBeacon,
+      consumeOut: consumeIdentityOut,
+    });
+  } else {
+    console.log('[identity_start] Nostr adapter disabled via BEACON_ID_NOSTR');
+  }
   startSignalAdapter(); // Note: Other adapters could be refactored similarly if needed
-  startNostrAdapter();
   startMeshAdapter();
 
   // Start CVM server

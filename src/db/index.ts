@@ -29,7 +29,7 @@ function migrate(db: Database) {
     const row = db.query(`SELECT v FROM _meta WHERE k = 'schema_version'`).get() as any;
     current = row?.v || null;
   } catch {}
-  const target = '9';
+  const target = '16';
   const needsReset = current !== target;
 
   if (needsReset) {
@@ -117,24 +117,16 @@ function migrate(db: Database) {
       updated_at INTEGER NOT NULL
     );
 
-    -- User wallets
+    -- User wallets and managed keys
     CREATE TABLE IF NOT EXISTS user_wallets (
       user_npub TEXT PRIMARY KEY,
-      encrypted_nwc_string TEXT NOT NULL,
+      encrypted_nsec TEXT NULL,
+      encrypted_nwc_string TEXT NULL,
       ln_address TEXT NULL,
       created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
     );
-
-    -- User-specific nickname to LN address mapping
-    CREATE TABLE IF NOT EXISTS nicknames (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_npub TEXT NOT NULL,
-      nickname TEXT NOT NULL,
-      ln_address TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-      UNIQUE (user_npub, nickname)
-    );
     `);
+    const target = '17';
 
     const upsert = db.query(`INSERT INTO _meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`);
     upsert.run(target);
