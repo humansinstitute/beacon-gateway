@@ -127,11 +127,14 @@ export function startWhatsAppAdapter(options?: {
         gateway: out.gateway,
       });
       const sendResult = await (async () => {
+        const opts: any = {};
+        if (out.quotedMessageId) opts.quotedMessageId = out.quotedMessageId;
         if (out.mediaBase64) {
           const media = new MessageMedia(out.mediaMime || 'application/octet-stream', out.mediaBase64);
-          return client.sendMessage(out.to, media, { caption: out.body || undefined, quotedMessageId: out.quotedMessageId });
+          if (out.body) opts.caption = out.body;
+          return client.sendMessage(out.to, media, opts);
         } else {
-          return client.sendMessage(out.to, out.body || '', { quotedMessageId: out.quotedMessageId });
+          return client.sendMessage(out.to, out.body || '', opts);
         }
       })();
       try {

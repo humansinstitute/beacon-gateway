@@ -76,6 +76,29 @@ export function startBrainWorker() {
           }
         } catch {}
       }
+      // If we still do not have a mapped user npub, inform the user and exit early
+      if (!msg.meta?.userNpub) {
+        const answer = 'Sorry, you will need to setup your beacon ID to use this service.';
+        msg.response = {
+          to: msg.source.from || '',
+          text: answer,
+          quotedMessageId: msg.source.messageId,
+          gateway: { ...msg.source.gateway },
+        };
+        const { messageId, deliveryId } = createOutboundMessage({
+          conversationId: msg.meta?.conversationID || '',
+          replyToMessageId: undefined,
+          role: 'beacon',
+          userNpub: null,
+          content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+          metadata: { gateway: msg.source.gateway },
+          channel: msg.source.gateway.type,
+        });
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
+        enqueueOut(out);
+        return;
+      }
+
       // Resolve conversation (use analyst when not a reply)
       const isSlash = /^\s*\//.test(text);
       const conv = await checkConversation({ replyToMessageId: undefined, userNpub: msg.meta?.userNpub || null, messageText: isSlash ? '' : text });
@@ -146,6 +169,170 @@ export function startBrainWorker() {
     console.log('[intent] route: wallet');
     // Wallet-related request: extract payment/balance details via agent
     if (route.text) text = route.text;
+
+    // Fast-path: handle /ls to list available commands
+    if (text.startsWith('/ls')) {
+      const cmds = [
+        '/ls - list all commands',
+        '/addnick <nickname> <lnAddress> - save a nickname to Lightning Address',
+        '/nickls - list your saved nicknames',
+        '/nick <nickname> <amount> [sats|$] - pay a saved nickname (USD converts via SATS_PER_DOLLAR)',
+        '/newgate <gatewayType> <username> - link another gateway account to your npub (types: whatsapp|signal|nostr|mesh|web)',
+      ];
+      const answer = `Commands:\n${cmds.join('\n')}`;
+      msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+      const { messageId, deliveryId } = createOutboundMessage({
+        conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+        content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+        metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+      });
+      const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+    }
+
+    // Fast-path: handle /newgate <gatewayType> <username> to add a mapping for this npub
+    if (text.startsWith('/newgate')) {
+      try {
+        const parts = text.split(/\s+/).filter(Boolean);
+        const gwTypeRaw = parts[1]?.toLowerCase();
+        const gatewayUser = parts[2]?.trim();
+        const allowed: Array<'whatsapp'|'signal'|'nostr'|'mesh'|'web'> = ['whatsapp','signal','nostr','mesh','web'];
+        if (!gwTypeRaw || !gatewayUser || !allowed.includes(gwTypeRaw as any)) {
+          const answer = 'Usage: /newgate <gatewayType> <username>. Example: /newgate web myname';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+        const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+        if (!npub || !npub.startsWith('npub')) {
+          const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+        const gatewayType = gwTypeRaw as 'whatsapp'|'signal'|'nostr'|'mesh'|'web';
+        const gatewayNpub = getEnv('GATEWAY_NPUB', '').trim();
+        if (!gatewayNpub) {
+          const answer = 'Server misconfiguration: GATEWAY_NPUB is not set.';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+
+        const { upsertLocalNpubMap } = await import('../gateway/npubMap');
+        upsertLocalNpubMap(gatewayType, gatewayNpub, gatewayUser, npub);
+
+        const answer = `Linked account: ${gatewayType}:${gatewayUser} -> ${npub}`;
+        msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+        const { messageId, deliveryId } = createOutboundMessage({
+          conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+          content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+          metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+        });
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+      } catch (err) {
+        console.error(`[brain] /newgate flow error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
+      }
+    }
+
+    // Fast-path: handle /nickls to list saved nicknames
+    if (text.startsWith('/nickls')) {
+      try {
+        const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+        if (!npub || !npub.startsWith('npub')) {
+          const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+        const { listNicknames } = await import('../db/nicknames');
+        const rows = listNicknames(npub);
+        const answer = rows.length === 0
+          ? 'No nicknames saved yet. Add one with: /addnick <nickname> <lnAddress>'
+          : `Your nicknames:\n` + rows.map(r => `- ${r.nickname} -> ${r.lnAddress}`).join('\n');
+        msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+        const { messageId, deliveryId } = createOutboundMessage({
+          conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+          content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+          metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+        });
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+      } catch (err) {
+        console.error(`[brain] /nickls flow error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
+      }
+    }
+
+    // Fast-path: handle /addnick <nickname> <lnAddress> without AI
+    if (text.startsWith('/addnick')) {
+      try {
+        const parts = text.split(/\s+/).filter(Boolean);
+        const nickname = parts[1]?.toLowerCase();
+        const lnAddress = parts[2]?.trim();
+        if (!nickname || !lnAddress) {
+          const answer = 'Usage: /addnick <nickname> <lnAddress>. Example: /addnick gg dergigi@primal.net';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+
+        // Very light validation for LN address (name@domain)
+        const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(lnAddress);
+        if (!valid) {
+          const answer = 'That does not look like a valid Lightning Address. Example: name@domain.tld';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+
+        const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
+        if (!npub || !npub.startsWith('npub')) {
+          const answer = 'I could not determine your npub. Please link your WhatsApp to a Beacon ID first.';
+          msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+          const { messageId, deliveryId } = createOutboundMessage({
+            conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+            content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+            metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+          });
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        }
+
+        const { upsertNickname } = await import('../db/nicknames');
+        upsertNickname(npub, nickname, lnAddress);
+        const answer = `Saved nickname: ${nickname} -> ${lnAddress}`;
+        msg.response = { to: msg.source.from || '', text: answer, quotedMessageId: msg.source.messageId, gateway: { ...msg.source.gateway } };
+        const { messageId, deliveryId } = createOutboundMessage({
+          conversationId: msg.meta?.conversationID || '', replyToMessageId: inboundMessageId, role: 'beacon', userNpub: msg.meta?.userNpub || null,
+          content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
+          metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
+        });
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+      } catch (err) {
+        console.error(`[brain] /addnick flow error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
+      }
+    }
 
     // Fast-path: handle /nick <nickname> <amount> without AI
     if (text.startsWith('/nick')) {

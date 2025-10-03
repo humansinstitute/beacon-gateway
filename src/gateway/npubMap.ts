@@ -72,3 +72,33 @@ export function resolveUserNpubLoose(gatewayUser: string): string | undefined {
     return undefined;
   }
 }
+
+/**
+ * Insert or update a local mapping row linking a gateway user to a user npub.
+ */
+export function upsertLocalNpubMap(
+  gatewayType: GatewayType,
+  gatewayNpub: string,
+  gatewayUser: string,
+  userNpub: string,
+  options?: { beaconBrainNpub?: string | null; beaconIdNpub?: string | null }
+): void {
+  const db = getDB();
+  const stmt = db.query(`
+    INSERT INTO local_npub_map (
+      gateway_type, gateway_npub, gateway_user, user_npub, beacon_brain_npub, beacon_id_npub
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(gateway_type, gateway_npub, gateway_user) DO UPDATE SET
+      user_npub = excluded.user_npub,
+      beacon_brain_npub = COALESCE(excluded.beacon_brain_npub, local_npub_map.beacon_brain_npub),
+      beacon_id_npub = COALESCE(excluded.beacon_id_npub, local_npub_map.beacon_id_npub)
+  `);
+  stmt.run(
+    gatewayType,
+    gatewayNpub,
+    gatewayUser,
+    userNpub,
+    options?.beaconBrainNpub ?? null,
+    options?.beaconIdNpub ?? null,
+  );
+}
