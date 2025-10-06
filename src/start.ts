@@ -8,6 +8,7 @@ import { startBrainWorker } from './brain/worker';
 import { getOutboundContext, forget } from './brain/beacon_store';
 import { logAction, createOutboundMessage } from './db';
 import { startBrainCvmServer } from './brain/cvm-server/cvm-server_b';
+import { startCvmDispatcher } from './gateway/cvm/dispatcher';
 
 function main() {
   const npub = getEnv('GATEWAY_NPUB', '');
@@ -15,17 +16,25 @@ function main() {
     console.warn('[start] GATEWAY_NPUB is not set; WhatsApp adapter will still run but outbound filtering may be broad');
   }
 
-  // Start gateways
-  startWhatsAppAdapter();
-  startSignalAdapter();
-  startNostrAdapter();
-  startMeshAdapter();
-  startWebAdapter();
+  const mode = getEnv('GATEWAY_MODE', '').toLowerCase();
+  if (mode === 'cvm') {
+    console.log('[start] GATEWAY_MODE=cvm -> remote gateways via CVM dispatcher');
+    // Do not start local adapters
+  } else {
+    // Start local adapters
+    startWhatsAppAdapter();
+    startSignalAdapter();
+    startNostrAdapter();
+    startMeshAdapter();
+    startWebAdapter();
+  }
 
   // Start brain worker
   startBrainWorker();
   // Start Brain CVM server
   startBrainCvmServer().catch(err => console.error('[brain-cvm] failed to start', err));
+  // Start CVM dispatcher when in cvm mode
+  if (mode === 'cvm') startCvmDispatcher();
 
 
   // Minimal HTTP server for health and webhooks
