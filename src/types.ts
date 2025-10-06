@@ -1,4 +1,4 @@
-export type GatewayType = 'whatsapp' | 'signal' | 'nostr' | 'mesh' | 'web';
+export type GatewayType = 'whatsapp' | 'signal' | 'nostr' | 'mesh' | 'web' | 'qaul';
 
 export interface GatewayInfo {
   npub: string;
@@ -62,6 +62,8 @@ export interface BeaconMeta {
   conversationID?: string;
   flowID?: string;
   userNpub?: string;
+  /** Preserved context/payload from upstream tools (e.g., CVM receiveMessage input) */
+  ctx?: Record<string, unknown>;
 }
 
 export interface BeaconMessage {

@@ -34,8 +34,26 @@ function normalizeLnInvoice(raw: string): string {
 }
 
 export function startBrainWorker() {
+  async function maybeReemitForCvm(msg: BeaconMessage, deliveryId?: string) {
+    try {
+      const mode = (getEnv('GATEWAY_MODE', '').toLowerCase());
+      if (mode !== 'cvm') return;
+      // attach deliveryId into preserved ctx for dispatcher to update status
+      msg.meta = msg.meta || {} as any;
+      (msg.meta as any).ctx = { ...((msg.meta as any).ctx || {}), deliveryId };
+      const { enqueueBeacon } = await import('../queues');
+      enqueueBeacon(msg);
+    } catch (err) {
+      console.error('[brain] maybeReemitForCvm error', err);
+    }
+  }
   consumeBeacon(async (msg: BeaconMessage) => {
     try {
+      const modeNow = (getEnv('GATEWAY_MODE', '').toLowerCase());
+      if (modeNow === 'cvm' && msg.response) {
+        // Dispatcher will handle messages that already have a response.
+        return;
+      }
       // Determine input text early for conversation analysis
       let text = (msg.source.text || '').trim();
       if (!text) {
@@ -96,6 +114,7 @@ export function startBrainWorker() {
         });
         const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId };
         enqueueOut(out);
+        await maybeReemitForCvm(msg, deliveryId);
         return;
       }
 
@@ -186,7 +205,7 @@ export function startBrainWorker() {
         content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
         metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
       });
-      const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+      const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
     }
 
     // Fast-path: handle /newgate <gatewayType> <username> to add a mapping for this npub
@@ -204,7 +223,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
         const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
         if (!npub || !npub.startsWith('npub')) {
@@ -215,7 +234,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
         const gatewayType = gwTypeRaw as 'whatsapp'|'signal'|'nostr'|'mesh'|'web';
         const gatewayNpub = getEnv('GATEWAY_NPUB', '').trim();
@@ -227,7 +246,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
 
         const { upsertLocalNpubMap } = await import('../gateway/npubMap');
@@ -240,7 +259,7 @@ export function startBrainWorker() {
           content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
           metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
         });
-        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
       } catch (err) {
         console.error(`[brain] /newgate flow error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
       }
@@ -258,7 +277,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
         const { listNicknames } = await import('../db/nicknames');
         const rows = listNicknames(npub);
@@ -271,7 +290,7 @@ export function startBrainWorker() {
           content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
           metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
         });
-        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
       } catch (err) {
         console.error(`[brain] /nickls flow error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
       }
@@ -291,7 +310,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
 
         // Very light validation for LN address (name@domain)
@@ -304,7 +323,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
 
         const npub = (msg.meta?.userNpub && String(msg.meta.userNpub)) || '';
@@ -316,7 +335,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
 
         const { upsertNickname } = await import('../db/nicknames');
@@ -328,7 +347,7 @@ export function startBrainWorker() {
           content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
           metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
         });
-        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+        const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
       } catch (err) {
         console.error(`[brain] /addnick flow error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
       }
@@ -348,7 +367,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
 
         // Parse amount and currency
@@ -379,7 +398,7 @@ export function startBrainWorker() {
             content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
             metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
           });
-          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+          const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
         }
         if (!amountSats || amountSats <= 0) {
           const answer = 'Could not parse amount. Use $ for dollars or provide sats.';
@@ -502,7 +521,7 @@ export function startBrainWorker() {
               content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
               metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
             });
-            const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+            const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
           } catch (err) {
             console.error(`[brain] cvm getLNInvoice error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
             logAction(msg.beaconID, 'cvm_getLNInvoice', { error: String((err as Error)?.message || err) }, 'failed');
@@ -521,7 +540,7 @@ export function startBrainWorker() {
                 content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
                 metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
               });
-              const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+              const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
             }
 
             const res = await cvmGetLNAddress({ npub, refId: msg.beaconID });
@@ -542,7 +561,7 @@ export function startBrainWorker() {
               content: { text: answer, to: msg.source.from || '', quotedMessageId: msg.source.messageId, beaconId: msg.beaconID },
               metadata: { gateway: msg.source.gateway }, channel: msg.source.gateway.type,
             });
-            const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); return;
+            const out: GatewayOutData = { ...toGatewayOut(msg), deliveryId, messageId }; enqueueOut(out); await maybeReemitForCvm(msg, deliveryId); return;
           } catch (err) {
             console.error(`[brain] cvm getLNAddress error beaconID=${msg.beaconID}: ${String((err as Error)?.message || err)}`);
             logAction(msg.beaconID, 'cvm_getLNAddress', { error: String((err as Error)?.message || err) }, 'failed');
